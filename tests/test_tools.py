@@ -15,6 +15,13 @@ def test_buscar_cliente_avisa_cuando_hay_varios(cliente):
     assert "HAY 2 CLIENTES" in out and "San Martín" in out and "Belgrano" in out
 
 
+def test_buscar_cliente_ignora_tildes_y_mayusculas(cliente):
+    """Como el backend real: «juan perez» encuentra a «Juan Pérez»."""
+    out = run(tools.buscar_cliente, texto="juan perez")
+    assert "1 resultado" in out and "Juan Pérez" in out
+    assert "Taladro" in run(tools.buscar_equipos, texto="TALADRO")
+
+
 def test_buscar_cliente_sin_resultados(cliente):
     assert run(tools.buscar_cliente, texto="Zzz").startswith("Sin resultados")
 
@@ -54,6 +61,37 @@ def test_fecha_ddmmaaaa_acepta_iso_date_y_texto_raro():
     assert tools.fecha_ddmmaaaa("24-01-2030") == "24-01-2030"
     assert tools.fecha_ddmmaaaa(date(2030, 1, 24)) == "24-01-2030"
     assert tools.fecha_ddmmaaaa("mañana") == "mañana" and tools.fecha_ddmmaaaa(None) == "None"
+
+
+def _alquilar(titulo, ini, fin, monto, cliente_id=1, domicilio_id=11):
+    return run(tools.crear_alquiler, cliente_id=cliente_id, domicilio_id=domicilio_id, titulo=titulo, monto_total=monto,
+               equipos=[{"herramienta_id": 4, "cantidad": 1}], fecha_inicio=ini, fecha_fin=fin)
+
+
+def test_historial_lista_todos_los_alquileres_de_un_cliente(cliente):
+    _alquilar("Obra Uno", "01-02-2030", "05-02-2030", 100000)
+    _alquilar("Obra Dos", "10-03-2030", "14-03-2030", 50000)
+    _alquilar("Obra del otro Pérez", "01-04-2030", "02-04-2030", 1000, cliente_id=2, domicilio_id=21)
+    out = run(tools.alquileres_de_cliente, cliente_id=1)
+    assert out.startswith("2 alquiler(es) de Juan Pérez")
+    assert out.index("Obra Dos") < out.index("Obra Uno")                       # el más reciente primero
+    assert "Obra Mitre" not in out and "otro Pérez" not in out                  # de otros clientes: no
+    assert "10-03-2030 a 14-03-2030" in out and "equipos: 1 x Taladro" in out
+    assert "valor $150.000,00 | pagado $0,00 | saldo $150.000,00" in out       # totales calculados en código
+
+
+def test_historial_incluye_los_cerrados_pero_no_los_suma(cliente):
+    _alquilar("Obra Uno", "01-02-2030", "05-02-2030", 100000)
+    cliente.alquileres[1]["estado"] = "CANCELADO"                                # el alquiler semilla (de María Gómez)
+    cliente.alquileres[2]["estado"] = "CANCELADO"
+    out = run(tools.alquileres_de_cliente, cliente_id=1)
+    assert "CANCELADO" in out and "Totales (sin contar cancelados): valor $0,00" in out
+    assert "1 CANCELADO" in out
+
+
+def test_historial_de_un_cliente_sin_alquileres(cliente):
+    assert "no tiene alquileres" in run(tools.alquileres_de_cliente, cliente_id=2)
+    assert "no tiene alquileres" in run(tools.alquileres_de_cliente, cliente_id=999)
 
 
 def test_error_inesperado_no_rompe(cliente, monkeypatch):

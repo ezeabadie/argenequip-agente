@@ -12,6 +12,7 @@ Convenciones que comparten ambas implementaciones:
   pensado para que lo lea el modelo (las tools lo devuelven tal cual).
 """
 import os
+import unicodedata
 from abc import ABC, abstractmethod
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -47,8 +48,12 @@ class ArgenEquipClient(ABC):
         """Crea el alquiler (body = CrearAlquilerRequest). Devuelve AlquilerMutacionResponse."""
 
     @abstractmethod
-    def listar_alquileres(self, estado: str | None = None, cliente: str | None = None) -> list[dict]:
-        """Alquileres (AlquilerListaResponse), todas las páginas hasta un tope."""
+    def listar_alquileres(self, estado: str | None = None, cliente: str | None = None,
+                          cliente_id: int | None = None) -> list[dict]:
+        """Alquileres (AlquilerListaResponse), todas las páginas hasta un tope.
+
+        `cliente` filtra por texto del nombre; `cliente_id`, por el cliente exacto (sin ambigüedad entre homónimos).
+        """
 
     @abstractmethod
     def ver_alquiler(self, alquiler_id: int) -> dict:
@@ -206,8 +211,8 @@ class HttpClient(ArgenEquipClient):
     def crear_alquiler(self, body):
         return self._request("POST", "/api/alquileres", json=body)
 
-    def listar_alquileres(self, estado=None, cliente=None):
-        params = {k: v for k, v in {"estado": estado, "cliente": cliente}.items() if v}
+    def listar_alquileres(self, estado=None, cliente=None, cliente_id=None):
+        params = {k: v for k, v in {"estado": estado, "cliente": cliente, "clienteId": cliente_id}.items() if v}
         return self._paginado("/api/alquileres", params)
 
     def ver_alquiler(self, alquiler_id):
@@ -383,13 +388,18 @@ class MockClient(ArgenEquipClient):
 
     # --- Operaciones ----------------------------------------------------------
 
+    @staticmethod
+    def _sin_tildes(texto: str) -> str:
+        """'Juan Pérez' -> 'juan perez'. El backend real busca sin distinguir tildes ni mayúsculas; el mock, igual."""
+        return "".join(c for c in unicodedata.normalize("NFD", texto) if unicodedata.category(c) != "Mn").lower().strip()
+
     def buscar_clientes(self, texto):
-        t = texto.lower().strip()
-        return [c for c in self.clientes if t in c["nombre"].lower() or t in c["dni"]]
+        t = self._sin_tildes(texto)
+        return [c for c in self.clientes if t in self._sin_tildes(c["nombre"]) or t in c["dni"]]
 
     def buscar_herramientas(self, texto):
-        t = texto.lower().strip()
-        return [h for h in self.herramientas if h["activo"] and t in h["nombre"].lower()]
+        t = self._sin_tildes(texto)
+        return [h for h in self.herramientas if h["activo"] and t in self._sin_tildes(h["nombre"])]
 
     def disponibilidad(self, herramienta_id, desde, hasta, cantidad):
         h = self._herramienta(herramienta_id)
@@ -402,12 +412,14 @@ class MockClient(ArgenEquipClient):
     def crear_alquiler(self, body):
         return self._mutacion(self._alta_alquiler(**body))
 
-    def listar_alquileres(self, estado=None, cliente=None):
+    def listar_alquileres(self, estado=None, cliente=None, cliente_id=None):
         out = []
         for a in self.alquileres.values():
             if estado and a["estado"] != estado:
                 continue
             if cliente and cliente.lower() not in a["clienteNombre"].lower():
+                continue
+            if cliente_id and a["clienteId"] != cliente_id:
                 continue
             lista = self._mutacion(a)
             lista["fechaFinReal"] = a["fechaFinReal"]

@@ -1,4 +1,4 @@
-"""Tools del agente ArgenEquip (alcance actual: comandos `nuevo` y `resumen`).
+"""Tools del agente ArgenEquip (alcance actual: comandos `nuevo`, `resumen` e `historial`).
 
 Reglas comunes a todas:
 - El docstring es lo que ve el modelo para decidir cuándo usarla; los argumentos tienen tipos.
@@ -70,6 +70,19 @@ def _estado_de_pago(a: dict) -> str:
     if float(a["saldoPendiente"]) <= 0:
         return "PAGADO"
     return "PAGO PARCIAL" if float(a["montoPagado"]) > 0 else "SIN PAGOS"
+
+
+def _linea_alquiler(c, a: dict) -> str:
+    """Un alquiler como texto (título, cliente, fechas, estado, equipos, valor, pagado, saldo y estado de pago)."""
+    detalle = c.ver_alquiler(a["id"])
+    equipos = ", ".join(f"{d['cantidadPrestada']} x {d['herramientaNombre']}" for d in detalle["detalles"])
+    return (
+        f"- #{a['id']} {a.get('titulo') or '(sin título)'} | cliente: {a['clienteNombre']} | "
+        f"{fecha_ddmmaaaa(a['fechaInicio'])} a {fecha_ddmmaaaa(a['fechaFinEstimada'])} | estado: {a['estado']}\n"
+        f"    equipos: {equipos}\n"
+        f"    valor {_monto(a['montoTotal'])} | pagado {_monto(a['montoPagado'])} | "
+        f"saldo {_monto(a['saldoPendiente'])} | pago: {_estado_de_pago(a)}"
+    )
 
 
 class ItemEquipo(BaseModel):
@@ -146,21 +159,42 @@ def resumen_alquileres() -> str:
     vigentes = [a for a in c.listar_alquileres() if a["estado"] not in ESTADOS_CERRADOS]
     if not vigentes:
         return "No hay alquileres activos."
-    filas = []
-    for a in vigentes[:20]:   # tope para no saturar el contexto del modelo
-        detalle = c.ver_alquiler(a["id"])
-        equipos = ", ".join(f"{d['cantidadPrestada']} x {d['herramientaNombre']}" for d in detalle["detalles"])
-        filas.append(
-            f"- #{a['id']} {a.get('titulo') or '(sin título)'} | cliente: {a['clienteNombre']} | "
-            f"{fecha_ddmmaaaa(a['fechaInicio'])} a {fecha_ddmmaaaa(a['fechaFinEstimada'])} | estado: {a['estado']}\n"
-            f"    equipos: {equipos}\n"
-            f"    valor {_monto(a['montoTotal'])} | pagado {_monto(a['montoPagado'])} | "
-            f"saldo {_monto(a['saldoPendiente'])} | pago: {_estado_de_pago(a)}"
-        )
+    filas = [_linea_alquiler(c, a) for a in vigentes[:20]]   # tope para no saturar el contexto del modelo
     total = sum(float(a["saldoPendiente"]) for a in vigentes)
     aviso = f" (se muestran los primeros 20 de {len(vigentes)})" if len(vigentes) > 20 else ""
     return (f"{len(vigentes)} alquiler(es) activo(s){aviso}:\n" + "\n".join(filas)
             + f"\nSaldo pendiente total: {_monto(total)}")
+
+
+# --- Comando `historial` -----------------------------------------------------------
+
+@tool
+@seguro
+def alquileres_de_cliente(cliente_id: int) -> str:
+    """Comando «historial»: lista TODOS los alquileres de un cliente, en cualquier estado
+    (activos, terminados, pagados y cancelados), del más reciente al más antiguo.
+
+    Recibe el id del cliente, que sale de buscar_cliente (si hay homónimos, hay que preguntarle al
+    socio cuál es). Los totales y el estado de pago vienen calculados: no se recalculan.
+    """
+    c = get_client()
+    alquileres = c.listar_alquileres(cliente_id=cliente_id)
+    if not alquileres:
+        return f"El cliente {cliente_id} no tiene alquileres registrados."
+    alquileres.sort(key=lambda a: str(a["fechaInicio"]), reverse=True)
+    filas = [_linea_alquiler(c, a) for a in alquileres[:30]]   # tope para no saturar el contexto del modelo
+    por_estado: dict[str, int] = {}
+    for a in alquileres:
+        por_estado[a["estado"]] = por_estado.get(a["estado"], 0) + 1
+    vigentes = [a for a in alquileres if a["estado"] != "CANCELADO"]   # un alquiler cancelado no se factura
+    valor = sum(float(a["montoTotal"]) for a in vigentes)
+    pagado = sum(float(a["montoPagado"]) for a in vigentes)
+    saldo = sum(float(a["saldoPendiente"]) for a in vigentes)
+    aviso = " (se muestran los 30 más recientes)" if len(alquileres) > 30 else ""
+    estados = ", ".join(f"{n} {e}" for e, n in sorted(por_estado.items()))
+    return (f"{len(alquileres)} alquiler(es) de {alquileres[0]['clienteNombre']}{aviso} [{estados}]:\n"
+            + "\n".join(filas)
+            + f"\nTotales (sin contar cancelados): valor {_monto(valor)} | pagado {_monto(pagado)} | saldo {_monto(saldo)}")
 
 
 # --- ESCRITURA (con confirmación humana) ------------------------------------------
@@ -217,6 +251,7 @@ def load_skill(nombre: str) -> str:
 
 # --- Registro ---------------------------------------------------------------------
 
-READ_TOOLS = [buscar_cliente, buscar_equipos, consultar_disponibilidad, resumen_alquileres, load_skill]
+READ_TOOLS = [buscar_cliente, buscar_equipos, consultar_disponibilidad, resumen_alquileres, alquileres_de_cliente,
+              load_skill]
 WRITE_TOOLS = [crear_alquiler]   # las únicas con confirmación humana (HITL)
 TOOLS = READ_TOOLS + WRITE_TOOLS
