@@ -8,6 +8,7 @@ Comandos disponibles hoy:
 |---|---|
 | `nuevo` | Crea un alquiler paso a paso: busca el cliente (y pregunta cuál si hay homónimos), elige el domicilio, busca los equipos, verifica disponibilidad en las fechas, **pide confirmación humana** y lo registra. El stock se reserva al crear. |
 | `resumen` | Muestra todos los alquileres activos con sus equipos, valor y estado de pago. |
+| `historial` | Lista **todos los alquileres de un cliente**, en cualquier estado, con equipos, valor, pagado, saldo y totales (ej.: *«listame todos los alquileres de Juan Pérez»*). Si hay homónimos, pregunta cuál. |
 | `cancelar` | Cancela la operación en curso (en la UI: botón *Rechazar* de la confirmación). |
 
 Se pueden escribir como comando suelto (`resumen`) o en una frase libre (*«Quiero alquilarle a Pérez una hormigonera del 24 al 28 por 120000»*). Las fechas se piden y se muestran siempre en formato **DD-MM-AAAA** (por ejemplo `24-11-2026`); hacia el backend viajan en ISO.
@@ -128,6 +129,7 @@ Los tests **no usan la API de Gemini** (el modelo se reemplaza por uno falso) ni
    → verifica la disponibilidad y **se pausa pidiendo confirmación** con el resumen del alquiler.
 3. Tocá **Aprobar** → se crea el alquiler y el stock queda reservado.
 4. `resumen` → lista los alquileres activos, incluido el nuevo, con equipos, valor y estado de pago.
+5. `listame todos los alquileres de Juan Pérez` → carga la skill `historial`, busca al cliente y muestra todos sus alquileres con los totales.
 
 > El plan gratuito de Gemini tiene límites bajos y la latencia puede ser de varios segundos por respuesta. Una demo completa usa unas 8 llamadas al modelo.
 
@@ -156,6 +158,7 @@ Los tests **no usan la API de Gemini** (el modelo se reemplaza por uno falso) ni
   - `consultar_disponibilidad`: verifica, por equipo, que haya unidades libres en las fechas pedidas.
   - `crear_alquiler`: escribe en el sistema (**única tool con confirmación humana**).
   - `resumen_alquileres`: consulta los alquileres vigentes; el estado de pago (`SIN PAGOS` / `PAGO PARCIAL` / `PAGADO`) y los totales se calculan en código, no con el modelo.
+  - `alquileres_de_cliente`: todos los alquileres de un cliente (por su id, sin ambigüedad entre homónimos), del más reciente al más antiguo, con totales calculados en código (los cancelados no se suman).
   - `load_skill`: carga las instrucciones de un comando bajo demanda.
   - Todas devuelven un texto `ERROR: …` ante cualquier falla (timeout, 401, 404, validación del backend, conexión) en lugar de lanzar excepciones, así que un error no corta el flujo del agente.
 - **Conocimiento propio: skills** (`skills/*.md`): cada comando tiene su procedimiento en un archivo markdown corto que el agente carga con `load_skill` cuando lo necesita (no ocupa contexto hasta entonces). Se eligió esto en lugar de RAG porque el conocimiento es *procedimental* (qué preguntar y en qué orden), es poco y cabe entero en el contexto; no hay un corpus de texto donde buscar.
@@ -168,11 +171,11 @@ Los tests **no usan la API de Gemini** (el modelo se reemplaza por uno falso) ni
 ## Limitaciones conocidas
 
 - **Privacidad:** en el plan gratuito, Google puede usar los datos enviados a Gemini para mejorar sus modelos. Por eso la demo usa clientes ficticios. El backend no se expone a internet: solo viaja a la nube lo que el agente lee en sus tools.
-- **Cancelar no es instantáneo:** Streamlit no puede abortar una llamada al modelo a mitad de camino. Al tocar **Detener**, la interfaz espera a que termine el paso que estaba en curso (normalmente unos segundos) y recién entonces descarta el turno. La reanudación después de **Aprobar** no se puede cancelar: la operación ya fue autorizada.
+- **Cancelar:** al tocar **Detener** la pantalla responde al instante (el turno desaparece del historial y tu mensaje vuelve a la caja), pero Streamlit no puede abortar una llamada al modelo a mitad de camino: esa llamada termina en segundo plano (y gasta una llamada de cuota) y su resultado se descarta apenas llega. Si reenviás enseguida, el turno nuevo espera a que ese paso termine. La reanudación después de **Aprobar** no se puede cancelar: la operación ya fue autorizada.
 - **Calidad según el modelo:** el flujo `nuevo` necesita un modelo con *tool calling* confiable. Los modelos gratuitos de OpenRouter pueden equivocar argumentos o ser lentos y tener cupos bajos; Gemini es el modelo con el que se probó la demo. El modelo elegido es global del proceso de Streamlit (pensado para un solo usuario local).
 - **Razonamiento en inglés:** los resúmenes de razonamiento de Gemini suelen venir en inglés aunque la respuesta sea en español. Con otros proveedores el razonamiento puede no estar disponible (la UI igualmente muestra cada tool y su resultado).
-- **Límites del plan gratuito:** si se supera la cuota, la UI muestra un aviso (429); si el modelo está saturado, otro (503). Se reintenta automáticamente hasta 4 veces antes de avisar.
-- **Alcance:** solo están implementados `nuevo`, `resumen` y `cancelar`. Los demás comandos del sistema (cobrar, objetos, flete, fechas, postergar, stock, etc.) todavía no están disponibles.
+- **Límites del plan gratuito:** si se agota el uso del modelo, la UI muestra un aviso **que queda a la vista** (no desaparece al redibujar) y dice qué proveedor y modelo fallaron, si el límite es diario o por minuto y, cuando el proveedor lo informa, en cuánto se libera. El mensaje que enviaste vuelve a la caja para reenviarlo, y podés cambiar de proveedor en la barra lateral. Hay avisos propios para modelo saturado (503), falta de crédito (402) y clave inválida (401/403). Se reintenta automáticamente hasta 4 veces antes de avisar. En Gemini gratuito el tope diario es bajo (unas 20 llamadas por día y modelo; una conversación de demo usa unas 8).
+- **Alcance:** solo están implementados `nuevo`, `resumen`, `historial` y `cancelar`. Los demás comandos del sistema (cobrar, objetos, flete, fechas, postergar, stock, etc.) todavía no están disponibles.
 - **Datos de la tarjeta de confirmación:** muestra el cliente y el domicilio por su id (el título del alquiler sí incluye el nombre).
 - **Modo `api`:** `consultar_disponibilidad`, `crear_alquiler` y el listado de alquileres siguen los contratos del backend leídos del código fuente; conviene validarlos contra el backend corriendo antes de la demo.
 - El estado del modo `mock` no persiste entre ejecuciones.

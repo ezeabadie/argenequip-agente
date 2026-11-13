@@ -8,7 +8,10 @@ llamada a tool, resultado, texto, pedido de aprobación) a medida que el agente 
 Consola:    python agente.py
 Streamlit:  streamlit run app.py
 """
+import math
+import re
 import sqlite3
+import threading
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
@@ -21,7 +24,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
-from model import get_model, modelo_por_defecto, proveedor_por_defecto
+from model import PROVEEDORES, get_model, modelo_por_defecto, proveedor_por_defecto
 from tools import TOOLS, WRITE_TOOLS, listar_skills
 
 # La fecha se fija al iniciar el programa (suficiente para una sesión de demo).
@@ -33,7 +36,7 @@ La fecha de hoy es {HOY:%d-%m-%Y} (DD-MM-AAAA). Usala para interpretar fechas co
 FECHAS: con el socio usá SIEMPRE el formato DD-MM-AAAA (día primero, por ejemplo 24-11-2026): cuando le pidas \
 una fecha, pedísela en ese formato, y mostrale las fechas así. Las tools también reciben DD-MM-AAAA.
 
-COMANDOS (el socio puede escribirlos solos o como frase libre): nuevo, resumen, cancelar.
+COMANDOS (el socio puede escribirlos solos o como frase libre): nuevo, resumen, historial, cancelar.
 Antes de ejecutar un comando, cargá su skill con load_skill y seguí su procedimiento. Skills disponibles: {listar_skills()}.
 Cuando uses una skill, nombrala en tu respuesta (por ejemplo «Siguiendo la skill nuevo…»).
 
@@ -46,7 +49,7 @@ reportes los da la tool tal cual.
 - crear_alquiler pide confirmación al socio automáticamente. No pidas permiso por texto: llamala \
 cuando tengas todos los datos y, si el socio la rechaza, preguntale qué quiere cambiar.
 - Si una tool devuelve ERROR, explicalo en palabras simples y proponé cómo seguir.
-- Solo están disponibles los comandos nuevo y resumen. Si piden otra cosa, decí que todavía no se puede hacer desde acá.
+- Solo están disponibles los comandos nuevo, resumen e historial. Si piden otra cosa, decí que todavía no se puede hacer desde acá.
 """
 
 DIR = Path(__file__).parent
@@ -189,6 +192,49 @@ def message_count(config: RunnableConfig) -> int:
     return len(saved_state(config).get("messages", []))
 
 
+class TurnoEnCurso:
+    """Un turno del agente que se está ejecutando y que el socio puede cancelar.
+
+    Al tocar «Detener», Streamlit arranca un script nuevo pero el viejo sigue vivo hasta su próxima
+    llamada a Streamlit: antes termina el paso del agente que estaba haciendo (p. ej. la llamada al
+    modelo) y lo guarda. Si el script nuevo descartara el turno enseguida, ese guardado tardío lo
+    haría reaparecer; y si esperara, la pantalla quedaría bloqueada hasta que el modelo responda.
+
+    Por eso el descarte lo hace **quien llegue segundo**, una sola vez (con un lock):
+    - `cancelar()` (script nuevo): si el viejo ya terminó, descarta él; si no, solo deja marcado.
+    - `terminar()` (script viejo, al terminar o al ser interrumpido): si hay marca, descarta él.
+    Así el script nuevo responde al instante y el descarte siempre ocurre DESPUÉS del último guardado.
+    """
+
+    def __init__(self, config: RunnableConfig):
+        self.config = config
+        self.mensajes_antes = message_count(config)   # dónde empieza este turno en el historial
+        self.hecho = threading.Event()                # se activa cuando el turno ya terminó y, si se canceló, se descartó
+        self._lock = threading.Lock()
+        self._terminado = False
+        self._cancelado = False
+
+    @property
+    def thread_id(self) -> str:
+        return self.config["configurable"]["thread_id"]
+
+    def cancelar(self) -> None:
+        with self._lock:
+            if not self._terminado:
+                self._cancelado = True     # el script viejo lo descartará en terminar()
+                return
+        discard_turn(self.config, self.mensajes_antes)
+        self.hecho.set()
+
+    def terminar(self) -> None:
+        with self._lock:
+            self._terminado = True
+            descartar = self._cancelado
+        if descartar:
+            discard_turn(self.config, self.mensajes_antes)
+        self.hecho.set()
+
+
 def discard_turn(config: RunnableConfig, mensajes_antes: int) -> None:
     """Descarta un turno interrumpido: borra del historial los mensajes agregados desde `mensajes_antes`.
 
@@ -209,10 +255,13 @@ def decision(aprobar: bool, motivo: str = "") -> Command:
     return Command(resume={"decisions": [{"type": "reject", "message": mensaje}]})
 
 
-def saved_turns(config: RunnableConfig) -> list[tuple[str, list[dict]]]:
-    """La conversación guardada como turnos: (pregunta, eventos del agente)."""
+def saved_turns(config: RunnableConfig, hasta: int | None = None) -> list[tuple[str, list[dict]]]:
+    """La conversación guardada como turnos: (pregunta, eventos del agente).
+
+    `hasta` limita a los primeros N mensajes (se usa mientras un turno cancelado todavía se está descartando).
+    """
     turnos: list[tuple[str, list[dict]]] = []
-    for m in saved_state(config).get("messages", []):
+    for m in saved_state(config).get("messages", [])[:hasta]:
         if m.type == "human":
             turnos.append((m.text, []))
         else:
@@ -220,10 +269,67 @@ def saved_turns(config: RunnableConfig) -> list[tuple[str, list[dict]]]:
     return turnos
 
 
-def es_limite_de_cuota(error: Exception) -> bool:
-    """¿El error es un 429 / cuota agotada del proveedor? (la UI muestra un aviso específico)."""
+def clasificar_error(error: Exception) -> str:
+    """Qué le pasó al modelo: "cuota", "credito", "saturado", "clave" u "otro" (se mira el nombre y el texto del error)."""
     texto = f"{type(error).__name__} {error}".lower()
-    return any(s in texto for s in ("429", "resource_exhausted", "rate limit", "quota"))
+
+    def hay(*pistas: str) -> bool:
+        return any(p in texto for p in pistas)
+
+    if hay("429", "resource_exhausted", "rate limit", "ratelimit", "quota", "too many requests", "toomanyrequests"):
+        return "cuota"
+    if hay("402", "payment required", "insufficient credit", "insufficient funds"):
+        return "credito"
+    if hay("503", "unavailable", "overloaded"):
+        return "saturado"
+    if hay("401", "403", "api key", "api_key", "unauthorized", "permission_denied", "authentication"):
+        return "clave"
+    return "otro"
+
+
+def es_limite_de_cuota(error: Exception) -> bool:
+    """¿El error es un 429 / cuota agotada del proveedor?"""
+    return clasificar_error(error) == "cuota"
+
+
+def _espera_sugerida(error: Exception) -> str | None:
+    """'12 h 39 min' si el proveedor dice cuándo se libera el cupo (Gemini: «Please retry in 12h39m48s»)."""
+    m = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", str(error), re.IGNORECASE)
+    if not m or not any(m.groups()):
+        return None
+    horas, minutos, segundos = int(m[1] or 0), int(m[2] or 0), float(m[3] or 0)
+    if horas:
+        return f"{horas} h {minutos} min" if minutos else f"{horas} h"
+    if minutos:
+        return f"{minutos} min"
+    return f"{max(1, math.ceil(segundos))} s"
+
+
+def explicar_error(error: Exception) -> tuple[str, str, str]:
+    """(tipo, título, detalle) en español para mostrarle al socio por qué falló el modelo y qué puede hacer."""
+    tipo = clasificar_error(error)
+    proveedor, nombre = modelo_actual()
+    quien = f"{PROVEEDORES.get(proveedor, proveedor)} · {nombre}"
+    if tipo == "cuota":
+        texto = str(error).lower()
+        causa = ("Es el límite DIARIO del plan gratuito. " if ("per day" in texto or "perday" in texto)
+                 else "El plan gratuito permite pocas llamadas por minuto. ")
+        espera = _espera_sugerida(error)
+        cuando = f"Se libera en aproximadamente {espera}. " if espera else "Esperá un momento y reintentá. "
+        return (tipo, "Se agotó el uso del modelo",
+                f"{quien} rechazó el pedido por límite de uso. {causa}{cuando}"
+                "Mientras tanto podés elegir otro proveedor o modelo en la barra lateral (sección Modelo).")
+    if tipo == "credito":
+        return (tipo, "Sin crédito en el proveedor",
+                f"{quien} pide saldo para seguir. Cargá crédito en su cuenta o elegí un modelo gratuito en la barra lateral.")
+    if tipo == "saturado":
+        return (tipo, "El modelo está saturado",
+                f"{quien} no pudo atender el pedido ahora. Reintentá en unos segundos o elegí otro modelo en la barra lateral.")
+    if tipo == "clave":
+        return (tipo, "Problema con la clave del proveedor",
+                f"{quien} rechazó las credenciales. Revisá la clave en el .env (GOOGLE_API_KEY / OPENROUTER_API_KEY) "
+                "y reiniciá la aplicación.")
+    return (tipo, "El agente falló", f"{type(error).__name__}: {str(error)[:300]}")
 
 
 # --- Consola -----------------------------------------------------------------
@@ -250,8 +356,8 @@ def _correr(entrada, config) -> None:
             for e in stream_turn(entrada, config):
                 print_evento(e)
         except Exception as err:
-            print("Aviso: límite de cuota del modelo (429), esperá un momento." if es_limite_de_cuota(err)
-                  else f"El agente falló: {err}")
+            _, titulo, detalle = explicar_error(err)
+            print(f"\n[ERROR] {titulo}. {detalle}\n")
             return
         if pending_approval(config) is None:
             return

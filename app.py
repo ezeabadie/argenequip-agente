@@ -5,7 +5,6 @@ llamada a tool, resultado, texto) y la confirmación humana (Aprobar / Rechazar)
 
 Ejecutar con:  streamlit run app.py
 """
-import threading
 from html import escape
 from pathlib import Path
 
@@ -13,7 +12,7 @@ import streamlit as st
 
 try:
     from agente import (
-        decision, discard_turn, es_limite_de_cuota, list_threads, message_count, modelo_actual, new_thread,
+        TurnoEnCurso, decision, discard_turn, explicar_error, list_threads, modelo_actual, new_thread,
         pending_approval, resume_thread, saved_turns, select_thread, stream_turn, usar_modelo,
     )
     from argenequip_client import get_client
@@ -78,43 +77,66 @@ def render_eventos(eventos) -> None:
         # "aprobacion" no se dibuja acá: lo hace render_aprobacion() desde el estado guardado.
 
 
-def mensaje_de_error(error: Exception) -> str:
-    """Texto claro para el socio según el tipo de falla del proveedor del modelo."""
-    texto = f"{type(error).__name__} {error}"
-    if es_limite_de_cuota(error):
-        return ("⏳ **Límite de uso del modelo alcanzado (429).** Los planes gratuitos permiten pocas "
-                "llamadas por minuto: esperá unos segundos y volvé a enviar el mensaje, o probá con otro proveedor.")
-    if "503" in texto or "UNAVAILABLE" in texto.upper():
-        return "🌐 **El modelo está saturado en este momento (503).** Reintentá en unos segundos."
-    return f"El agente falló: {error}"
+ICONOS_ERROR = {"cuota": "⏳", "credito": "💳", "saturado": "🌐", "clave": "🔑", "otro": "⚠️"}
+
+
+def render_error() -> None:
+    """Aviso de la última falla del modelo (cuota agotada, saturación, clave inválida...).
+
+    Se guarda en session_state porque `correr` termina con st.rerun(), que redibuja toda la pantalla y
+    borraría un aviso mostrado en ese momento. Queda a la vista hasta que se envía otro mensaje.
+    """
+    e = st.session_state.get("error")
+    if not e or e["hilo"] != st.session_state.config["configurable"]["thread_id"]:
+        return
+    nivel = st.warning if e["tipo"] in ("cuota", "credito", "saturado") else st.error
+    texto = f"**{e['titulo']}**\n\n{e['detalle']}"
+    if e["restaurado"]:
+        texto += "\n\nTu mensaje quedó en la caja de chat para que lo reenvíes."
+    nivel(texto, icon=ICONOS_ERROR[e["tipo"]])
 
 
 def correr(entrada) -> None:
     """Ejecuta un turno (o la reanudación tras la confirmación) mostrándolo en vivo.
 
     Cancelación: mientras corre un mensaje nuevo se muestra «Detener». Al tocarlo, Streamlit arranca un
-    script nuevo y le avisa al viejo que se detenga, pero el viejo no se entera hasta su próxima llamada a
-    Streamlit: antes termina el paso del agente que estaba haciendo (p. ej. la llamada al modelo) y lo guarda.
-    Por eso el script nuevo no puede descartar el turno enseguida: tiene que esperar a que el viejo termine
-    (`terminado`), o el turno reaparecería. Se hace al comienzo del script. La reanudación tras Aprobar no
-    se puede cancelar: la operación ya fue autorizada.
+    script nuevo (ver el comienzo del script) mientras este sigue vivo hasta su próxima llamada a Streamlit.
+    Este `finally` corre cuando eso pasa, y ahí `TurnoEnCurso.terminar()` descarta el turno si se canceló.
+    La reanudación tras Aprobar no se puede cancelar: la operación ya fue autorizada.
     """
     es_mensaje = isinstance(entrada, str)
-    terminado = threading.Event()
-    if es_mensaje:
-        st.session_state.en_curso = (entrada, message_count(st.session_state.config), terminado)
+    config = st.session_state.config
+    # Si el turno anterior se canceló y todavía se está terminando, se lo espera: dos turnos a la vez
+    # sobre el mismo hilo de conversación se pisarían.
+    anterior = st.session_state.pop("cancelado", None)
+    if anterior is not None and anterior.thread_id == config["configurable"]["thread_id"]:
+        with st.spinner("Terminando de cancelar la respuesta anterior…"):
+            anterior.hecho.wait(timeout=120)
+    st.session_state.pop("error", None)   # enviar algo nuevo borra el aviso de la falla anterior
+    turno = TurnoEnCurso(config) if es_mensaje else None
+    if turno:
+        st.session_state.en_curso = (entrada, turno)
     try:
         with mensaje("assistant"):
             if es_mensaje:
                 st.button("⏹ Detener", key="detener", help="Cancela esta respuesta y te deja editar tu mensaje")
             try:
                 with st.spinner("El agente está trabajando..."):
-                    render_eventos(stream_turn(entrada, st.session_state.config))
+                    render_eventos(stream_turn(entrada, config))
             except Exception as e:
-                st.warning(mensaje_de_error(e)) if es_limite_de_cuota(e) else st.error(mensaje_de_error(e))
+                # El modelo falló (cuota agotada, saturación...). Se guarda el aviso para mostrarlo después del
+                # st.rerun() y, si era un mensaje nuevo, se descarta el turno sin respuesta y el texto vuelve a
+                # la caja para reenviarlo cuando se pueda.
+                tipo, titulo, detalle = explicar_error(e)
+                if turno:
+                    discard_turn(config, turno.mensajes_antes)
+                    st.session_state.restaurar = entrada
+                st.session_state.error = {"tipo": tipo, "titulo": titulo, "detalle": detalle,
+                                          "restaurado": turno is not None, "hilo": config["configurable"]["thread_id"]}
     finally:
-        terminado.set()   # este script ya no avanza (también si Streamlit lo interrumpió): el nuevo puede seguir
-    # Termino normal (o con error ya mostrado). Si Streamlit interrumpió el turno, no se llega acá
+        if turno:
+            turno.terminar()   # corre también si Streamlit interrumpe este script
+    # Termino normal (o con error ya guardado). Si Streamlit interrumpió el turno, no se llega acá
     # (corta con una excepción que no es `Exception`) y `en_curso` queda marcado.
     st.session_state.en_curso = None
     st.rerun()   # redibuja todo desde el estado guardado (incluye la confirmación pendiente)
@@ -236,7 +258,8 @@ def render_bienvenida() -> None:
         st.session_state.entrada = "resumen"
         st.rerun()
     st.html('<div class="ejemplo">También podés escribir, por ejemplo: '
-            '<q>Quiero alquilarle a Pérez una hormigonera del 24 al 28 por 120000</q></div>')
+            '<q>Quiero alquilarle a Pérez una hormigonera del 24 al 28 por 120000</q> o '
+            '<q>Listame todos los alquileres de Juan Pérez</q></div>')
 
 
 if "config" not in st.session_state:
@@ -244,18 +267,32 @@ if "config" not in st.session_state:
 config = st.session_state.config
 
 # ¿Quedó un turno a medias? Pasa si el socio tocó «Detener» (o cualquier otro control) mientras el agente
-# trabajaba: Streamlit cortó el script anterior antes de que borrara `en_curso`. Se descarta ese turno del
+# trabajaba: Streamlit cortó el script anterior antes de que borrara `en_curso`. El turno se descarta del
 # historial y el mensaje vuelve a la caja de chat para que se pueda editar y reenviar.
+# NO se espera a que el script anterior termine (puede tardar lo que tarde el modelo en responder): la
+# pantalla responde al instante y el descarte lo completa `TurnoEnCurso` apenas el otro script termina.
 interrumpido = st.session_state.pop("en_curso", None)
 if interrumpido:
-    texto, mensajes_antes, terminado = interrumpido
-    with st.spinner("Cancelando: se termina el paso que estaba en curso…"):
-        terminado.wait(timeout=120)   # el script anterior sigue vivo hasta su próxima llamada a Streamlit
-    discard_turn(config, mensajes_antes)
+    texto, turno = interrumpido
+    turno.cancelar()
+    st.session_state.cancelado = turno
     st.session_state["chat"] = texto   # precarga la caja (la key es la de st.chat_input de más abajo)
     st.toast("Respuesta cancelada. Editá tu mensaje y reenviálo cuando quieras.", icon="⏹️")
 
-acciones = pending_approval(config)
+# Si el modelo falló en el turno anterior, su mensaje vuelve a la caja (ver `correr`). Se hace acá, antes de
+# dibujar la caja: Streamlit no deja cambiar el valor de un widget después de dibujarlo.
+restaurar = st.session_state.pop("restaurar", None)
+if restaurar:
+    st.session_state["chat"] = restaurar
+
+# Mientras ese turno cancelado se termina de descartar, el historial se muestra solo hasta antes de él.
+cancelado = st.session_state.get("cancelado")
+if cancelado is not None and cancelado.hecho.is_set():
+    st.session_state.pop("cancelado")
+    cancelado = None
+en_descarte = cancelado is not None and cancelado.thread_id == config["configurable"]["thread_id"]
+
+acciones = None if en_descarte else pending_approval(config)
 
 # Entrada pendiente: un botón de la barra lateral o la decisión Aprobar/Rechazar (más abajo, un mensaje escrito).
 entrada = st.session_state.pop("entrada", None)
@@ -270,9 +307,11 @@ if isinstance(prompt, str):
 
 render_sidebar()
 render_cabecera()
+if entrada is None:
+    render_error()   # si está por correr un turno, el aviso viejo ya no corresponde
 
 # Streamlit re-ejecuta todo el script en cada interacción: se redibuja la conversación guardada.
-turnos = saved_turns(config)
+turnos = saved_turns(config, hasta=cancelado.mensajes_antes if en_descarte else None)
 if not turnos and entrada is None and not acciones:
     render_bienvenida()
 for pregunta, eventos in turnos:

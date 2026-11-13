@@ -114,6 +114,49 @@ def test_cancelar_un_turno_a_medias_deja_seguir_la_conversacion(armar, corte, gu
     assert mensajes[2].text == "pedido nuevo"
 
 
+def _turno_a_medias(armar):
+    """Una conversación con un turno interrumpido justo después de que el modelo pidió una tool."""
+    ag, cfg = armar(AIMessage(content="Hola!"), _llamada_resumen(), AIMessage(content="B"))
+    list(ag.stream_turn("hola", cfg))
+    turno = ag.TurnoEnCurso(cfg)
+    for e in ag.stream_turn("pedido", cfg):
+        if e["tipo"] == "llamada":
+            break
+    assert ag.message_count(cfg) == turno.mensajes_antes + 2     # el pedido y la llamada a la tool
+    return ag, cfg, turno
+
+
+def test_cancelar_antes_de_que_termine_el_script_viejo_lo_descarta_el_viejo(armar):
+    """Caso normal: el script nuevo marca la cancelación al instante y el viejo (que sigue en el paso del modelo) descarta."""
+    ag, cfg, turno = _turno_a_medias(armar)
+    turno.cancelar()
+    assert not turno.hecho.is_set() and ag.message_count(cfg) == turno.mensajes_antes + 2   # todavía nada
+    turno.terminar()                                                                       # el viejo termina su paso
+    assert turno.hecho.is_set() and ag.message_count(cfg) == turno.mensajes_antes
+
+
+def test_cancelar_cuando_el_script_viejo_ya_termino_descarta_el_nuevo(armar):
+    ag, cfg, turno = _turno_a_medias(armar)
+    turno.terminar()                                                                       # el viejo ya se había detenido
+    assert ag.message_count(cfg) == turno.mensajes_antes + 2                               # sin cancelar no se toca nada
+    turno.cancelar()
+    assert turno.hecho.is_set() and ag.message_count(cfg) == turno.mensajes_antes
+
+
+def test_turno_que_termina_normalmente_no_se_descarta(armar):
+    ag, cfg = armar(AIMessage(content="Hola!"))
+    turno = ag.TurnoEnCurso(cfg)
+    list(ag.stream_turn("hola", cfg))
+    turno.terminar()
+    assert turno.hecho.is_set() and ag.message_count(cfg) == 2
+
+
+def test_historial_limitado_oculta_el_turno_que_se_esta_descartando(armar):
+    ag, cfg, turno = _turno_a_medias(armar)
+    assert [p for p, _ in ag.saved_turns(cfg)] == ["hola", "pedido"]
+    assert [p for p, _ in ag.saved_turns(cfg, hasta=turno.mensajes_antes)] == ["hola"]
+
+
 def test_descartar_sin_cambios_no_toca_nada(armar):
     ag, cfg = armar(AIMessage(content="Hola!"))
     list(ag.stream_turn("hola", cfg))
@@ -154,3 +197,35 @@ def test_proveedor_invalido(monkeypatch):
 def test_es_limite_de_cuota(agente_mod):
     assert agente_mod.es_limite_de_cuota(Exception("429 RESOURCE_EXHAUSTED: quota"))
     assert not agente_mod.es_limite_de_cuota(Exception("503 UNAVAILABLE"))
+
+
+GEMINI_DIARIO = ("Error calling model 'gemini-3.5-flash' (RESOURCE_EXHAUSTED): 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, "
+                 "'message': 'You exceeded your current quota. * Quota exceeded for metric: generate_content_free_tier_requests, "
+                 "limit: 20, description: Generate content requests per day limit exceeded on Free Tier.\\nPlease retry in "
+                 "12h39m48.172705921s.', 'status': 'RESOURCE_EXHAUSTED'}}")
+
+
+class TooManyRequestsResponseError(Exception):   # el nombre es lo que lanza el SDK de OpenRouter
+    pass
+
+
+def test_cuota_diaria_de_gemini_explica_el_limite_y_cuando_se_libera(agente_mod):
+    tipo, titulo, detalle = agente_mod.explicar_error(Exception(GEMINI_DIARIO))
+    assert tipo == "cuota" and titulo == "Se agotó el uso del modelo"
+    assert "DIARIO" in detalle and "12 h 39 min" in detalle and "barra lateral" in detalle
+
+
+def test_cuota_por_minuto_y_openrouter(agente_mod):
+    _, _, detalle = agente_mod.explicar_error(Exception("429 RESOURCE_EXHAUSTED. Please retry in 34.5s."))
+    assert "por minuto" in detalle and "35 s" in detalle and "DIARIO" not in detalle
+    # OpenRouter no dice «429» en el texto, pero el nombre del error lo delata
+    assert agente_mod.clasificar_error(TooManyRequestsResponseError("Provider returned error")) == "cuota"
+
+
+def test_otros_errores_del_modelo_se_clasifican(agente_mod):
+    c = agente_mod.clasificar_error
+    assert c(Exception("503 UNAVAILABLE: model overloaded")) == "saturado"
+    assert c(Exception("400 INVALID_ARGUMENT: API key not valid")) == "clave"
+    assert c(Exception("402 Payment Required: insufficient credits")) == "credito"
+    tipo, titulo, detalle = agente_mod.explicar_error(ValueError("algo raro"))
+    assert (tipo, titulo) == ("otro", "El agente falló") and "algo raro" in detalle
