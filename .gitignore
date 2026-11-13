@@ -5,6 +5,9 @@ referencias/
 .env
 .venv/
 
+# IDE
+.idea/
+
 # Generados en ejecución
 memoria.db
 conversaciones.txt
