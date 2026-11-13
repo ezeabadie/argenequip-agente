@@ -33,8 +33,27 @@ def test_disponibilidad_no_alcanza(cliente):
 def test_errores_se_devuelven_como_texto(cliente):
     assert run(tools.consultar_disponibilidad, herramienta_id=999, fecha_desde="2030-01-01",
                fecha_hasta="2030-01-02", cantidad=1).startswith("ERROR: No encontrado")
-    assert "AAAA-MM-DD" in run(tools.consultar_disponibilidad, herramienta_id=1, fecha_desde="24/01",
+    assert "DD-MM-AAAA" in run(tools.consultar_disponibilidad, herramienta_id=1, fecha_desde="24/01",
                                fecha_hasta="2030-01-02")
+
+
+def test_fechas_en_formato_dd_mm_aaaa(cliente):
+    """El socio habla en DD-MM-AAAA: las tools lo aceptan y lo devuelven así; el backend sigue recibiendo ISO."""
+    out = run(tools.crear_alquiler, cliente_id=1, domicilio_id=11, titulo="Obra", monto_total=1000,
+              equipos=[{"herramienta_id": 4, "cantidad": 1}], fecha_inicio="24-01-2030", fecha_fin="28-01-2030")
+    assert "24-01-2030 a 28-01-2030" in out
+    guardado = cliente.alquileres[max(cliente.alquileres)]
+    assert str(guardado["fechaInicio"]) == "2030-01-24" and str(guardado["fechaFinEstimada"]) == "2030-01-28"
+    disp = run(tools.consultar_disponibilidad, herramienta_id=4, fecha_desde="24-01-2030", fecha_hasta="28-01-2030")
+    assert "del 24-01-2030 al 28-01-2030" in disp and "ALCANZA" in disp
+    assert "24-01-2030 a 28-01-2030" in run(tools.resumen_alquileres)
+
+
+def test_fecha_ddmmaaaa_acepta_iso_date_y_texto_raro():
+    assert tools.fecha_ddmmaaaa("2030-01-24") == "24-01-2030"
+    assert tools.fecha_ddmmaaaa("24-01-2030") == "24-01-2030"
+    assert tools.fecha_ddmmaaaa(date(2030, 1, 24)) == "24-01-2030"
+    assert tools.fecha_ddmmaaaa("mañana") == "mañana" and tools.fecha_ddmmaaaa(None) == "None"
 
 
 def test_error_inesperado_no_rompe(cliente, monkeypatch):

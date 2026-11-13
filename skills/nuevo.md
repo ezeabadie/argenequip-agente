@@ -14,7 +14,7 @@ Si el socio ya dio alguno en su mensaje, no se lo vuelvas a preguntar.
    - Más de 1: mostrale las opciones (nombre, DNI, domicilios) y **preguntá cuál**. Nunca elijas vos.
 2. **Domicilio**: si el cliente tiene más de uno, preguntá cuál. Si tiene uno solo, usalo y avisalo.
 3. **Equipos**: `buscar_equipos` por cada equipo pedido para obtener su id. Si el nombre es ambiguo o no existe, preguntá.
-4. **Fechas**: formato AAAA-MM-DD. Si el socio dice «del 24 al 28» sin mes/año, asumí el mes y año actuales (la fecha de hoy está en el prompt) y confirmalo en el resumen. La fecha de inicio no puede ser posterior a la de fin.
+4. **Fechas**: formato **DD-MM-AAAA** (día primero, por ejemplo 24-11-2026), tanto al pedírselas al socio como al mostrárselas. Si te las pasa en otro formato, convertilas y confirmalas en ese. Si dice «del 24 al 28» sin mes/año, asumí el mes y año actuales (la fecha de hoy está en el prompt) y confirmalo en el resumen. La fecha de inicio no puede ser posterior a la de fin. Las tools reciben las fechas también en DD-MM-AAAA.
 5. **Disponibilidad**: `consultar_disponibilidad` **una vez por equipo**, con las fechas y la cantidad pedidas. Si alguno «NO ALCANZA», informalo y preguntá cómo seguir (otra cantidad, otras fechas o quitar el equipo). No crees el alquiler.
 6. **Monto**: lo dice el socio. Si no lo dio, preguntalo. **No lo calcules ni lo estimes.**
 7. **Título**: armalo vos, corto y descriptivo (ej. «Obra Pérez - San Martín 450»).

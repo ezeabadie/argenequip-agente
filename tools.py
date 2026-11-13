@@ -11,7 +11,7 @@ Reglas comunes a todas:
 La tool de ESCRITURA (`crear_alquiler`) va con confirmación humana (ver WRITE_TOOLS).
 """
 import functools
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from langchain.tools import tool
@@ -45,10 +45,24 @@ def _monto(v) -> str:
 
 
 def _fecha(texto: str, campo: str) -> date:
+    """Fecha en DD-MM-AAAA (el formato del socio). Por tolerancia acepta también AAAA-MM-DD."""
+    for formato in ("%d-%m-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(texto.strip(), formato).date()
+        except (AttributeError, ValueError):
+            continue
+    raise ArgenEquipError(f"{campo} inválida «{texto}»: usar el formato DD-MM-AAAA (por ejemplo 24-11-2026).")
+
+
+def fecha_ddmmaaaa(valor) -> str:
+    """'2026-11-24' (como lo guarda el backend) o '24-11-2026' o un date -> '24-11-2026'.
+
+    Es lo que ve el socio. Si no se puede interpretar, devuelve el texto tal cual.
+    """
     try:
-        return date.fromisoformat(texto)
-    except (TypeError, ValueError):
-        raise ArgenEquipError(f"{campo} inválida «{texto}»: usar el formato AAAA-MM-DD.")
+        return (valor if isinstance(valor, date) else _fecha(str(valor), "fecha")).strftime("%d-%m-%Y")
+    except ArgenEquipError:
+        return str(valor)
 
 
 def _estado_de_pago(a: dict) -> str:
@@ -108,15 +122,15 @@ def buscar_equipos(texto: str = "") -> str:
 @tool
 @seguro
 def consultar_disponibilidad(herramienta_id: int, fecha_desde: str, fecha_hasta: str, cantidad: int = 1) -> str:
-    """Verifica cuántas unidades de UN equipo están libres entre dos fechas (formato AAAA-MM-DD).
+    """Verifica cuántas unidades de UN equipo están libres entre dos fechas (formato DD-MM-AAAA, ej. 24-11-2026).
 
     Es por equipo: si el pedido tiene varios equipos, llamala una vez por cada uno.
     """
-    _fecha(fecha_desde, "fecha_desde"), _fecha(fecha_hasta, "fecha_hasta")
-    d = get_client().disponibilidad(herramienta_id, fecha_desde, fecha_hasta, cantidad)
+    desde, hasta = _fecha(fecha_desde, "fecha_desde"), _fecha(fecha_hasta, "fecha_hasta")
+    d = get_client().disponibilidad(herramienta_id, desde.isoformat(), hasta.isoformat(), cantidad)   # el backend usa ISO
     estado = "ALCANZA" if d["cantidadDisponible"] >= cantidad else "NO ALCANZA"
-    return (f"{d['nombreHerramienta']} del {fecha_desde} al {fecha_hasta}: disponibles {d['cantidadDisponible']}, "
-            f"solicitados {cantidad} -> {estado}.")
+    return (f"{d['nombreHerramienta']} del {fecha_ddmmaaaa(desde)} al {fecha_ddmmaaaa(hasta)}: "
+            f"disponibles {d['cantidadDisponible']}, solicitados {cantidad} -> {estado}.")
 
 
 # --- Comando `resumen` ------------------------------------------------------------
@@ -138,7 +152,7 @@ def resumen_alquileres() -> str:
         equipos = ", ".join(f"{d['cantidadPrestada']} x {d['herramientaNombre']}" for d in detalle["detalles"])
         filas.append(
             f"- #{a['id']} {a.get('titulo') or '(sin título)'} | cliente: {a['clienteNombre']} | "
-            f"{a['fechaInicio']} a {a['fechaFinEstimada']} | estado: {a['estado']}\n"
+            f"{fecha_ddmmaaaa(a['fechaInicio'])} a {fecha_ddmmaaaa(a['fechaFinEstimada'])} | estado: {a['estado']}\n"
             f"    equipos: {equipos}\n"
             f"    valor {_monto(a['montoTotal'])} | pagado {_monto(a['montoPagado'])} | "
             f"saldo {_monto(a['saldoPendiente'])} | pago: {_estado_de_pago(a)}"
@@ -155,7 +169,7 @@ def resumen_alquileres() -> str:
 @seguro
 def crear_alquiler(cliente_id: int, domicilio_id: int, titulo: str, fecha_inicio: str, fecha_fin: str,
                    monto_total: float, equipos: list[ItemEquipo], descripcion: str | None = None) -> str:
-    """ESCRITURA (comando «nuevo»): crea un alquiler y reserva el stock. Fechas AAAA-MM-DD; monto_total lo indica el socio.
+    """ESCRITURA (comando «nuevo»): crea un alquiler y reserva el stock. Fechas DD-MM-AAAA (ej. 24-11-2026); monto_total lo indica el socio.
 
     Usala solo con ids obtenidos de buscar_cliente y buscar_equipos, y tras verificar la
     disponibilidad de cada equipo. El socio debe confirmar antes de que se ejecute.
@@ -165,12 +179,12 @@ def crear_alquiler(cliente_id: int, domicilio_id: int, titulo: str, fecha_inicio
         return "ERROR: la fecha de inicio es posterior a la de fin."
     a = get_client().crear_alquiler({
         "clienteId": cliente_id, "domicilioId": domicilio_id, "titulo": titulo,
-        "fechaInicio": fecha_inicio, "fechaFinEstimada": fecha_fin, "montoTotal": monto_total,
+        "fechaInicio": ini.isoformat(), "fechaFinEstimada": fin.isoformat(), "montoTotal": monto_total,   # el backend usa ISO
         "descripcion": descripcion, "urlDocumento": None,
         "detalles": [{"herramientaId": e.herramienta_id, "cantidadPrestada": e.cantidad} for e in equipos],
     })
     return (f"Alquiler creado: #{a['id']} {a['titulo']} | cliente: {a['clienteNombre']} | "
-            f"{a['fechaInicio']} a {a['fechaFinEstimada']} | estado: {a['estado']} | "
+            f"{fecha_ddmmaaaa(a['fechaInicio'])} a {fecha_ddmmaaaa(a['fechaFinEstimada'])} | estado: {a['estado']} | "
             f"valor {_monto(a['montoTotal'])}, saldo {_monto(a['saldoPendiente'])}")
 
 
