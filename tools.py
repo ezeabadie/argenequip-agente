@@ -1,0 +1,208 @@
+"""Tools del agente ArgenEquip (alcance actual: comandos `nuevo` y `resumen`).
+
+Reglas comunes a todas:
+- El docstring es lo que ve el modelo para decidir cuándo usarla; los argumentos tienen tipos.
+- Nunca lanzan excepciones: el decorador `@seguro` convierte cualquier falla en un texto
+  "ERROR: ..." que el modelo puede leer y explicarle al socio (la consigna pide que un
+  error no corte el flujo del agente).
+- Hablan con el sistema a través de `get_client()` (API real o mock), nunca con la base.
+- Las cuentas y los formatos se hacen acá, en código (el modelo no calcula).
+
+La tool de ESCRITURA (`crear_alquiler`) va con confirmación humana (ver WRITE_TOOLS).
+"""
+import functools
+from datetime import date
+from pathlib import Path
+
+from langchain.tools import tool
+from pydantic import BaseModel, Field
+
+from argenequip_client import ESTADOS_CERRADOS, ArgenEquipError, get_client
+
+BASE_DIR = Path(__file__).resolve().parent
+SKILLS_DIR = BASE_DIR / "skills"
+
+
+# --- Utilidades ---------------------------------------------------------------
+
+def seguro(fn):
+    """Captura toda excepción y la devuelve como texto, para no romper el flujo del agente."""
+    @functools.wraps(fn)   # conserva nombre, docstring y firma (los usa @tool para el esquema)
+    def envoltura(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except ArgenEquipError as e:
+            return f"ERROR: {e}"
+        except Exception as e:  # último recurso: bug inesperado
+            return f"ERROR inesperado en {fn.__name__}: {type(e).__name__}: {e}"
+    return envoltura
+
+
+def _monto(v) -> str:
+    """12345.5 -> '$12.345,50' (formato argentino)."""
+    s = f"{float(v):,.2f}"
+    return "$" + s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _fecha(texto: str, campo: str) -> date:
+    try:
+        return date.fromisoformat(texto)
+    except (TypeError, ValueError):
+        raise ArgenEquipError(f"{campo} inválida «{texto}»: usar el formato AAAA-MM-DD.")
+
+
+def _estado_de_pago(a: dict) -> str:
+    """Estado de pago derivado de los montos (en código, no lo deduce el modelo)."""
+    if float(a["saldoPendiente"]) <= 0:
+        return "PAGADO"
+    return "PAGO PARCIAL" if float(a["montoPagado"]) > 0 else "SIN PAGOS"
+
+
+class ItemEquipo(BaseModel):
+    """Un equipo y su cantidad."""
+    herramienta_id: int = Field(description="ID del equipo (idHerramienta), obtenido con buscar_equipos")
+    cantidad: int = Field(gt=0, description="Cantidad de unidades (mayor a 0)")
+
+
+# --- Consulta: apoyo para `nuevo` -----------------------------------------------
+
+@tool
+@seguro
+def buscar_cliente(texto: str) -> str:
+    """Busca clientes por nombre o DNI. Devuelve id, nombre, DNI y domicilios (con su id).
+
+    Indica explícitamente si hay 0 resultados o más de uno: en ese caso hay que
+    preguntarle al socio cuál es, nunca elegir por él. Si el cliente tiene varios
+    domicilios, también hay que preguntar cuál usar.
+    """
+    clientes = get_client().buscar_clientes(texto)
+    if not clientes:
+        return f"Sin resultados: no hay clientes que coincidan con «{texto}»."
+    filas = []
+    for c in clientes:
+        doms = "; ".join(f"[id {d['id']}] {d['calle']} {d['numero']}" for d in c["domicilios"]) or "sin domicilios cargados"
+        filas.append(f"- id {c['id']}: {c['nombre']} (DNI {c['dni']}) | domicilios: {doms}")
+    aviso = (f"HAY {len(clientes)} CLIENTES: preguntale al socio cuál es antes de seguir.\n"
+             if len(clientes) > 1 else "1 resultado.\n")
+    return aviso + "\n".join(filas)
+
+
+@tool
+@seguro
+def buscar_equipos(texto: str = "") -> str:
+    """Busca equipos ACTIVOS por nombre (texto vacío = todos) y muestra su stock.
+
+    `stock útil` = stock total - perdido. No considera alquileres en curso: para saber si
+    hay unidades libres en unas fechas usá consultar_disponibilidad.
+    """
+    equipos = get_client().buscar_herramientas(texto)
+    if not equipos:
+        return f"Sin resultados: no hay equipos activos que coincidan con «{texto}»."
+    return "\n".join(
+        f"- id {e['idHerramienta']}: {e['nombre']} | stock total {e['stockTotal']}, perdido {e['stockPerdido']}, "
+        f"stock útil {e['stockTotal'] - e['stockPerdido']}"
+        for e in equipos
+    )
+
+
+@tool
+@seguro
+def consultar_disponibilidad(herramienta_id: int, fecha_desde: str, fecha_hasta: str, cantidad: int = 1) -> str:
+    """Verifica cuántas unidades de UN equipo están libres entre dos fechas (formato AAAA-MM-DD).
+
+    Es por equipo: si el pedido tiene varios equipos, llamala una vez por cada uno.
+    """
+    _fecha(fecha_desde, "fecha_desde"), _fecha(fecha_hasta, "fecha_hasta")
+    d = get_client().disponibilidad(herramienta_id, fecha_desde, fecha_hasta, cantidad)
+    estado = "ALCANZA" if d["cantidadDisponible"] >= cantidad else "NO ALCANZA"
+    return (f"{d['nombreHerramienta']} del {fecha_desde} al {fecha_hasta}: disponibles {d['cantidadDisponible']}, "
+            f"solicitados {cantidad} -> {estado}.")
+
+
+# --- Comando `resumen` ------------------------------------------------------------
+
+@tool
+@seguro
+def resumen_alquileres() -> str:
+    """Comando «resumen»: muestra todos los alquileres ACTIVOS (vigentes) con sus equipos, valor y estado de pago.
+
+    Excluye los cancelados y los totalmente pagados. No recibe argumentos.
+    """
+    c = get_client()
+    vigentes = [a for a in c.listar_alquileres() if a["estado"] not in ESTADOS_CERRADOS]
+    if not vigentes:
+        return "No hay alquileres activos."
+    filas = []
+    for a in vigentes[:20]:   # tope para no saturar el contexto del modelo
+        detalle = c.ver_alquiler(a["id"])
+        equipos = ", ".join(f"{d['cantidadPrestada']} x {d['herramientaNombre']}" for d in detalle["detalles"])
+        filas.append(
+            f"- #{a['id']} {a.get('titulo') or '(sin título)'} | cliente: {a['clienteNombre']} | "
+            f"{a['fechaInicio']} a {a['fechaFinEstimada']} | estado: {a['estado']}\n"
+            f"    equipos: {equipos}\n"
+            f"    valor {_monto(a['montoTotal'])} | pagado {_monto(a['montoPagado'])} | "
+            f"saldo {_monto(a['saldoPendiente'])} | pago: {_estado_de_pago(a)}"
+        )
+    total = sum(float(a["saldoPendiente"]) for a in vigentes)
+    aviso = f" (se muestran los primeros 20 de {len(vigentes)})" if len(vigentes) > 20 else ""
+    return (f"{len(vigentes)} alquiler(es) activo(s){aviso}:\n" + "\n".join(filas)
+            + f"\nSaldo pendiente total: {_monto(total)}")
+
+
+# --- ESCRITURA (con confirmación humana) ------------------------------------------
+
+@tool
+@seguro
+def crear_alquiler(cliente_id: int, domicilio_id: int, titulo: str, fecha_inicio: str, fecha_fin: str,
+                   monto_total: float, equipos: list[ItemEquipo], descripcion: str | None = None) -> str:
+    """ESCRITURA (comando «nuevo»): crea un alquiler y reserva el stock. Fechas AAAA-MM-DD; monto_total lo indica el socio.
+
+    Usala solo con ids obtenidos de buscar_cliente y buscar_equipos, y tras verificar la
+    disponibilidad de cada equipo. El socio debe confirmar antes de que se ejecute.
+    """
+    ini, fin = _fecha(fecha_inicio, "fecha_inicio"), _fecha(fecha_fin, "fecha_fin")
+    if ini > fin:
+        return "ERROR: la fecha de inicio es posterior a la de fin."
+    a = get_client().crear_alquiler({
+        "clienteId": cliente_id, "domicilioId": domicilio_id, "titulo": titulo,
+        "fechaInicio": fecha_inicio, "fechaFinEstimada": fecha_fin, "montoTotal": monto_total,
+        "descripcion": descripcion, "urlDocumento": None,
+        "detalles": [{"herramientaId": e.herramienta_id, "cantidadPrestada": e.cantidad} for e in equipos],
+    })
+    return (f"Alquiler creado: #{a['id']} {a['titulo']} | cliente: {a['clienteNombre']} | "
+            f"{a['fechaInicio']} a {a['fechaFinEstimada']} | estado: {a['estado']} | "
+            f"valor {_monto(a['montoTotal'])}, saldo {_monto(a['saldoPendiente'])}")
+
+
+# --- Skills (conocimiento bajo demanda, patrón de la cátedra) -------------------------
+
+def _descripcion(ruta: Path) -> str:
+    """Valor de `description:` en el encabezado de una skill."""
+    for linea in ruta.read_text(encoding="utf-8").splitlines():
+        if linea.startswith("description:"):
+            return linea.removeprefix("description:").strip()
+    return ""
+
+
+def listar_skills() -> str:
+    """'nombre: descripción' de cada skill, para el system prompt."""
+    return "; ".join(f"{p.stem}: {_descripcion(p)}" for p in sorted(SKILLS_DIR.glob("*.md")))
+
+
+@tool
+def load_skill(nombre: str) -> str:
+    """Carga las instrucciones detalladas de una skill (las disponibles figuran en el prompt).
+
+    Usala antes de ejecutar un comando para el que exista una skill, y nombrala al responder.
+    """
+    skills = {p.stem: p for p in SKILLS_DIR.glob("*.md")}
+    if nombre not in skills:
+        return f"No existe la skill «{nombre}». Disponibles: {', '.join(skills) or 'ninguna'}."
+    return skills[nombre].read_text(encoding="utf-8")
+
+
+# --- Registro ---------------------------------------------------------------------
+
+READ_TOOLS = [buscar_cliente, buscar_equipos, consultar_disponibilidad, resumen_alquileres, load_skill]
+WRITE_TOOLS = [crear_alquiler]   # las únicas con confirmación humana (HITL)
+TOOLS = READ_TOOLS + WRITE_TOOLS

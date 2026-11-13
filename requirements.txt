@@ -1,0 +1,23 @@
+# Núcleo del agente
+langchain>=1.0
+langgraph>=1.0
+python-dotenv>=1.0
+
+# Proveedor de modelo principal (Gemini vía AI Studio)
+langchain-google-genai>=3.0
+
+# Respaldo opcional (ver model.py): OpenRouter / Groq
+# langchain-openrouter
+# langchain-groq
+
+# Memoria de corto plazo
+langgraph-checkpoint-sqlite>=3.0
+
+# Cliente HTTP del backend
+requests>=2.31
+
+# UI
+streamlit>=1.40
+
+# Tests
+pytest>=8.0

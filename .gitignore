@@ -1,0 +1,13 @@
+# Material de la cátedra y backend de referencia (no se versiona)
+referencias/
+
+# Secretos y entorno
+.env
+.venv/
+
+# Generados en ejecución
+memoria.db
+conversaciones.txt
+__pycache__/
+.pytest_cache/
+*.pyc
