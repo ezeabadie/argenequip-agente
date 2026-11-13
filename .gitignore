@@ -9,7 +9,7 @@ referencias/
 .idea/
 
 # Generados en ejecución
-memoria.db
+memoria.db*
 conversaciones.txt
 __pycache__/
 .pytest_cache/

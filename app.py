@@ -171,6 +171,18 @@ def render_sidebar() -> None:
 if "config" not in st.session_state:
     st.session_state.config = resume_thread()
 config = st.session_state.config
+acciones = pending_approval(config)
+
+# Entrada pendiente: un mensaje escrito, un botón de la barra lateral, o la decisión Aprobar/Rechazar.
+entrada = st.session_state.pop("entrada", None)
+
+# La caja de chat es LO PRIMERO que se dibuja (aunque en pantalla va abajo) y queda bloqueada mientras
+# el agente trabaja. Si se dibujara después de la barra lateral y del historial, durante ese redibujado
+# seguiría en pantalla la de la corrida anterior, todavía habilitada.
+# Lo escrito se guarda como `entrada` y se reinicia el script: el turno arranca con la caja ya bloqueada.
+if prompt := st.chat_input("Escribí un comando o tu consulta...", disabled=bool(acciones) or entrada is not None):
+    st.session_state.entrada = prompt
+    st.rerun()
 
 st.title("🛠️ ArgenEquip · Asistente")
 render_sidebar()
@@ -181,10 +193,6 @@ for pregunta, eventos in saved_turns(config):
     with st.chat_message("assistant"):
         render_eventos(eventos)
 
-acciones = pending_approval(config)
-
-# Entrada pendiente: un botón de la barra lateral, o la decisión Aprobar/Rechazar.
-entrada = st.session_state.pop("entrada", None)
 if isinstance(entrada, str):
     st.chat_message("user").markdown(entrada)
 
@@ -192,7 +200,3 @@ if entrada is not None:
     correr(entrada)
 elif acciones:
     render_aprobacion(acciones)
-
-if prompt := st.chat_input("Escribí un comando o tu consulta...", disabled=bool(acciones)):
-    st.chat_message("user").markdown(prompt)
-    correr(prompt)
