@@ -77,6 +77,35 @@ def test_memoria_conserva_turnos_y_se_reconstruye(armar):
     assert len(ag.saved_state(cfg)["messages"]) == 4
 
 
+def test_cambiar_de_modelo_reconstruye_el_agente(agente_mod, monkeypatch):
+    monkeypatch.setattr(agente_mod, "agent", agente_mod.agent)       # se restauran al terminar el test
+    monkeypatch.setattr(agente_mod, "_modelo", agente_mod._modelo)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "clave-falsa")
+    antes = agente_mod.agent
+    agente_mod.usar_modelo("openrouter", "proveedor/modelo:free")
+    assert agente_mod.modelo_actual() == ("openrouter", "proveedor/modelo:free")
+    assert agente_mod.agent is not antes
+    despues = agente_mod.agent
+    agente_mod.usar_modelo("openrouter", "proveedor/modelo:free")   # mismo modelo: no se reconstruye
+    assert agente_mod.agent is despues
+
+
+def test_cambiar_de_modelo_sin_clave_falla_y_conserva_el_anterior(agente_mod, monkeypatch):
+    monkeypatch.setattr(agente_mod, "agent", agente_mod.agent)
+    monkeypatch.setattr(agente_mod, "_modelo", agente_mod._modelo)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    antes, modelo = agente_mod.agent, agente_mod.modelo_actual()
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+        agente_mod.usar_modelo("openrouter", "proveedor/modelo:free")
+    assert agente_mod.agent is antes and agente_mod.modelo_actual() == modelo
+
+
+def test_proveedor_invalido(monkeypatch):
+    import model
+    with pytest.raises(RuntimeError, match="inválido"):
+        model.get_model("inexistente", "x")
+
+
 def test_es_limite_de_cuota(agente_mod):
     assert agente_mod.es_limite_de_cuota(Exception("429 RESOURCE_EXHAUSTED: quota"))
     assert not agente_mod.es_limite_de_cuota(Exception("503 UNAVAILABLE"))

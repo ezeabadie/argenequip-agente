@@ -20,7 +20,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
-from model import get_model
+from model import get_model, modelo_por_defecto, proveedor_por_defecto
 from tools import TOOLS, WRITE_TOOLS, listar_skills
 
 # La fecha se fija al iniciar el programa (suficiente para una sesión de demo).
@@ -66,7 +66,24 @@ def build_agent(model, checkpointer):
     )
 
 
-agent = build_agent(get_model(), SqliteSaver(sqlite3.connect(DIR / "memoria.db", check_same_thread=False)))
+# El checkpointer es uno solo: al cambiar de modelo las conversaciones guardadas se conservan.
+CHECKPOINTER = SqliteSaver(sqlite3.connect(DIR / "memoria.db", check_same_thread=False))
+_modelo = (proveedor_por_defecto(), modelo_por_defecto(proveedor_por_defecto()))   # (proveedor, nombre) en uso
+agent = build_agent(get_model(*_modelo), CHECKPOINTER)
+
+
+def modelo_actual() -> tuple[str, str]:
+    """(proveedor, nombre) del modelo con el que está armado el agente."""
+    return _modelo
+
+
+def usar_modelo(proveedor: str, nombre: str) -> None:
+    """Cambia el modelo del agente. Si falla (p. ej. falta la clave) deja el anterior y lanza RuntimeError."""
+    global agent, _modelo
+    if (proveedor, nombre) == _modelo:
+        return
+    agent = build_agent(get_model(proveedor, nombre), CHECKPOINTER)   # si falla, no se toca nada
+    _modelo = (proveedor, nombre)
 
 
 # --- Conversaciones (patrón de la cátedra) -----------------------------------

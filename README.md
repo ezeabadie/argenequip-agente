@@ -61,9 +61,11 @@ pip install -r requirements.txt
 
 | Variable | Descripción |
 |---|---|
-| `GOOGLE_API_KEY` | Clave de Gemini (obligatoria). |
-| `MODEL_PROVIDER` | `google_genai` (por defecto). Respaldos soportados: `openrouter`, `groq` (ver `model.py`; requieren instalar su paquete y su clave). |
-| `MODEL_NAME` | Modelo a usar. Por defecto `gemini-3.5-flash`, que devuelve el razonamiento que muestra la UI. |
+| `GOOGLE_API_KEY` | Clave de Gemini (obligatoria si usás Gemini). |
+| `OPENROUTER_API_KEY` | Clave de OpenRouter (<https://openrouter.ai/keys>); solo si elegís ese proveedor. |
+| `MODEL_PROVIDER` | Proveedor con el que arranca la app: `google_genai` (por defecto) u `openrouter`. Se cambia después desde la barra lateral. |
+| `MODEL_NAME` | Modelo de Gemini. Por defecto `gemini-3.5-flash`, que devuelve el razonamiento que muestra la UI. |
+| `OPENROUTER_MODEL` | Slug del modelo de OpenRouter (los gratuitos terminan en `:free`). Tiene que soportar *tool calling*. |
 | `ARGENEQUIP_MODE` | `mock` (datos de prueba en memoria) o `api` (backend real). |
 | `ARGENEQUIP_BASE_URL` | Solo modo `api`. Ej.: `http://localhost:8080`. |
 | `ARGENEQUIP_USER` / `ARGENEQUIP_PASSWORD` | Solo modo `api`. Credenciales de un usuario SOCIO. |
@@ -99,7 +101,7 @@ Se abre en <http://localhost:8501>. En la pantalla vas a ver, en vivo mientras e
 - la respuesta en markdown,
 - cuando una operación modifica el sistema, una tarjeta de **confirmación** con los botones **Aprobar** / **Rechazar**.
 
-La barra lateral tiene atajos para `nuevo` y `resumen` y la lista de conversaciones (cada una conserva su memoria).
+La barra lateral tiene atajos para `nuevo` y `resumen`, el **selector de proveedor y modelo** (Gemini u OpenRouter; el nombre del modelo es editable) y la lista de conversaciones (cada una conserva su memoria, también si cambiás de modelo a mitad de camino). Si falta la clave del proveedor elegido, la UI avisa y sigue con el modelo anterior.
 
 ### Consola
 
@@ -163,6 +165,7 @@ Los tests **no usan la API de Gemini** (el modelo se reemplaza por uno falso) ni
 ## Limitaciones conocidas
 
 - **Privacidad:** en el plan gratuito, Google puede usar los datos enviados a Gemini para mejorar sus modelos. Por eso la demo usa clientes ficticios. El backend no se expone a internet: solo viaja a la nube lo que el agente lee en sus tools.
+- **Calidad según el modelo:** el flujo `nuevo` necesita un modelo con *tool calling* confiable. Los modelos gratuitos de OpenRouter pueden equivocar argumentos o ser lentos y tener cupos bajos; Gemini es el modelo con el que se probó la demo. El modelo elegido es global del proceso de Streamlit (pensado para un solo usuario local).
 - **Razonamiento en inglés:** los resúmenes de razonamiento de Gemini suelen venir en inglés aunque la respuesta sea en español. Con otros proveedores el razonamiento puede no estar disponible (la UI igualmente muestra cada tool y su resultado).
 - **Límites del plan gratuito:** si se supera la cuota, la UI muestra un aviso (429); si el modelo está saturado, otro (503). Se reintenta automáticamente hasta 4 veces antes de avisar.
 - **Alcance:** solo están implementados `nuevo`, `resumen` y `cancelar`. Los demás comandos del sistema (cobrar, objetos, flete, fechas, postergar, stock, etc.) todavía no están disponibles.

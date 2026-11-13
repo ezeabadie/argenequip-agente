@@ -6,8 +6,10 @@ python-dotenv>=1.0
 # Proveedor de modelo principal (Gemini vía AI Studio)
 langchain-google-genai>=3.0
 
-# Respaldo opcional (ver model.py): OpenRouter / Groq
-# langchain-openrouter
+# Segundo proveedor, seleccionable desde la UI (ver model.py)
+langchain-openrouter>=0.2
+
+# Opcional (solo por .env): Groq
 # langchain-groq
 
 # Memoria de corto plazo
