@@ -19,7 +19,7 @@ langgraph-checkpoint-sqlite>=3.0
 requests>=2.31
 
 # UI
-streamlit>=1.40
+streamlit>=1.67   # se usa chat_input(submit_mode=...) y st.html (probado con 1.67)
 
 # Tests
 pytest>=8.0

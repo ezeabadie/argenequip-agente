@@ -1,0 +1,145 @@
+/* Estilos de la UI (app.py los inyecta). Paleta:
+   fondo #050505 · panel #0C0C0E · borde #1C1C20 · texto #ECECEC · apagado #8B8B94 · acento #F59E0B */
+
+:root {
+  --fondo: #050505;
+  --panel: #0c0c0e;
+  --panel-2: #121215;
+  --borde: #1c1c20;
+  --texto: #ececec;
+  --apagado: #8b8b94;
+  --acento: #f59e0b;
+  --acento-suave: rgba(245, 158, 11, 0.12);
+  --radio: 14px;
+}
+
+/* --- Base --------------------------------------------------------------- */
+.stApp { background: var(--fondo); }
+header[data-testid="stHeader"] { background: transparent; }
+[data-testid="stAppDeployButton"], footer, #MainMenu { display: none !important; }
+.block-container { max-width: 860px; padding-top: 1.6rem; padding-bottom: 7rem; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #26262b; border-radius: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* --- Barra lateral (se oculta con la flecha; el botón queda siempre visible) --- */
+[data-testid="stSidebar"] {
+  background: #08080a;
+  border-right: 1px solid var(--borde);
+}
+[data-testid="stSidebar"] .block-container,
+[data-testid="stSidebarUserContent"] { padding-top: 1rem; }
+[data-testid="stSidebarCollapseButton"],
+[data-testid="stSidebarCollapseButton"] button,
+[data-testid="stExpandSidebarButton"],
+[data-testid="stExpandSidebarButton"] button,
+[data-testid="stSidebarCollapsedControl"] {
+  opacity: 1 !important;
+  visibility: visible !important;
+  color: var(--acento) !important;
+}
+[data-testid="stExpandSidebarButton"] button,
+[data-testid="stSidebarCollapsedControl"] button {
+  background: var(--panel-2); border: 1px solid var(--borde); border-radius: 10px;
+}
+
+.marca-lateral { font-size: 1.25rem; font-weight: 700; letter-spacing: .2px; margin-bottom: .1rem; }
+.marca-lateral span { color: var(--acento); }
+.sub-lateral { color: var(--apagado); font-size: .8rem; margin-bottom: 1rem; }
+.seccion {
+  color: var(--apagado); font-size: .7rem; font-weight: 600; letter-spacing: .12em;
+  text-transform: uppercase; margin: 1.1rem 0 .45rem;
+}
+
+/* --- Cabecera ----------------------------------------------------------- */
+.cabecera { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  flex-wrap: wrap; padding-bottom: .9rem; margin-bottom: 1.2rem; border-bottom: 1px solid var(--borde); }
+.cabecera .marca { font-size: 1.35rem; font-weight: 700; }
+.cabecera .marca small { color: var(--apagado); font-weight: 400; font-size: .85rem; margin-left: .5rem; }
+.chips { display: flex; gap: .4rem; flex-wrap: wrap; }
+.chip { background: var(--panel-2); border: 1px solid var(--borde); color: var(--apagado);
+  border-radius: 999px; padding: .2rem .7rem; font-size: .75rem; white-space: nowrap; }
+.chip.ok { color: #4ade80; border-color: rgba(74, 222, 128, .25); }
+.chip.demo { color: var(--acento); border-color: rgba(245, 158, 11, .3); }
+
+/* --- Pantalla de bienvenida --------------------------------------------- */
+.hero { text-align: center; padding: 2.4rem 0 1.2rem; }
+.hero h1 { font-size: 2rem; font-weight: 700; margin: 0 0 .5rem; letter-spacing: -.01em; }
+.hero p { color: var(--apagado); max-width: 520px; margin: 0 auto; line-height: 1.5; }
+.ejemplo { text-align: center; color: var(--apagado); font-size: .85rem; margin-top: 1.2rem; }
+.ejemplo q { color: var(--texto); }
+
+/* El «Stop» nativo de Streamlit corta el script sin dejar limpiar el turno: se usa el botón «Detener» de la app. */
+[data-testid="stStatusWidget"] { display: none !important; }
+
+/* --- Botones ------------------------------------------------------------ */
+.stButton > button, [data-testid="stBaseButton-secondary"] {
+  background: var(--panel-2); border: 1px solid var(--borde); border-radius: 12px;
+  color: var(--texto); transition: border-color .15s, background .15s, transform .05s;
+}
+.stButton > button:hover { border-color: var(--acento); background: #17171b; color: #fff; }
+.stButton > button:active { transform: scale(.985); }
+.stButton > button:disabled { opacity: .45; }
+.stButton > button[data-testid="stBaseButton-primary"] {
+  background: var(--acento); border-color: var(--acento); color: #1a1100; font-weight: 600;
+}
+.stButton > button[data-testid="stBaseButton-primary"]:hover { background: #fbbf24; border-color: #fbbf24; color: #1a1100; }
+
+/* Títulos largos de conversaciones: una línea con puntos suspensivos */
+[data-testid="stSidebar"] .stButton button p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Botón «Detener» (cancela la respuesta en curso) */
+.st-key-detener button { min-height: 2rem; padding: .1rem .8rem; font-size: .85rem; background: transparent; color: var(--apagado); }
+.st-key-detener button:hover { border-color: #f87171 !important; color: #f87171 !important; background: rgba(248, 113, 113, .08) !important; }
+
+/* Tarjetas de la bienvenida */
+.st-key-hero_nuevo button, .st-key-hero_resumen button {
+  min-height: 96px; text-align: left; justify-content: flex-start; padding: 1rem 1.2rem;
+  background: var(--panel); border-radius: var(--radio);
+}
+.st-key-hero_nuevo button:hover, .st-key-hero_resumen button:hover {
+  box-shadow: 0 0 0 3px var(--acento-suave);
+}
+.st-key-hero_nuevo button > div, .st-key-hero_resumen button > div,
+.st-key-hero_nuevo button [data-testid="stMarkdownContainer"],
+.st-key-hero_resumen button [data-testid="stMarkdownContainer"] { width: 100%; justify-content: flex-start; text-align: left; }
+.st-key-hero_nuevo button p, .st-key-hero_resumen button p { text-align: left; line-height: 1.5; color: var(--apagado); }
+.st-key-hero_nuevo button p strong, .st-key-hero_resumen button p strong { color: var(--texto); font-size: 1.02rem; }
+
+/* --- Campos ------------------------------------------------------------- */
+[data-baseweb="select"] > div, [data-baseweb="input"] > div, [data-baseweb="base-input"] {
+  background: var(--panel-2) !important; border-color: var(--borde) !important; border-radius: 10px !important;
+}
+[data-testid="stSidebar"] label p { color: var(--apagado); font-size: .78rem; }
+
+/* --- Mensajes del chat -------------------------------------------------- */
+[data-testid="stChatMessage"] {
+  background: var(--panel); border: 1px solid var(--borde); border-radius: var(--radio);
+  padding: .9rem 1.1rem; margin-bottom: .7rem; gap: .8rem;
+}
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+  background: linear-gradient(135deg, rgba(245, 158, 11, .10), rgba(245, 158, 11, .03));
+  border-color: rgba(245, 158, 11, .25);
+}
+[data-testid="stChatMessageAvatarUser"], [data-testid="stChatMessageAvatarAssistant"] {
+  background: var(--panel-2); border: 1px solid var(--borde); border-radius: 10px;
+}
+[data-testid="stChatMessage"] p { line-height: 1.6; }
+
+/* Razonamiento, tools y resultados */
+[data-testid="stExpander"], [data-testid="stStatus"] {
+  background: var(--fondo); border: 1px solid var(--borde); border-radius: 12px;
+}
+[data-testid="stExpander"] summary, [data-testid="stStatus"] summary { font-size: .88rem; color: var(--apagado); }
+[data-testid="stCode"], pre { background: #08080a !important; border-radius: 10px; }
+[data-testid="stAlert"] { border-radius: var(--radio); }
+
+/* --- Caja de entrada ---------------------------------------------------- */
+[data-testid="stBottom"], [data-testid="stBottom"] > div { background: var(--fondo); }
+[data-testid="stChatInput"] {
+  background: var(--panel-2); border: 1px solid var(--borde); border-radius: 18px;
+  transition: border-color .15s, box-shadow .15s;
+}
+[data-testid="stChatInput"]:focus-within { border-color: var(--acento); box-shadow: 0 0 0 3px var(--acento-suave); }
+[data-testid="stChatInput"] textarea { background: transparent; }
+[data-testid="stChatInput"]:has(textarea:disabled) { opacity: .5; }

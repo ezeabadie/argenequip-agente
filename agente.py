@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain_core.messages import RemoveMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
@@ -28,7 +29,9 @@ HOY = date.today()
 
 SYSTEM_PROMPT = f"""Sos el asistente de ArgenEquip, un sistema de alquiler de herramientas y equipos para obra. \
 Ayudás a un socio a operar el sistema. Respondé siempre en español rioplatense, de forma breve y clara.
-La fecha de hoy es {HOY.isoformat()} (AAAA-MM-DD). Usala para interpretar fechas como «el lunes» o «del 24 al 28».
+La fecha de hoy es {HOY:%d-%m-%Y} (DD-MM-AAAA). Usala para interpretar fechas como «el lunes» o «del 24 al 28».
+FECHAS: con el socio usá SIEMPRE el formato DD-MM-AAAA (día primero, por ejemplo 24-11-2026): cuando le pidas \
+una fecha, pedísela en ese formato, y mostrale las fechas así. Las tools también reciben DD-MM-AAAA.
 
 COMANDOS (el socio puede escribirlos solos o como frase libre): nuevo, resumen, cancelar.
 Antes de ejecutar un comando, cargá su skill con load_skill y seguí su procedimiento. Skills disponibles: {listar_skills()}.
@@ -171,12 +174,31 @@ def stream_turn(entrada: str | Command, config: RunnableConfig) -> Iterator[dict
         entrada = {"messages": [{"role": "user", "content": entrada}]}
     # stream_mode="values": tras cada paso llega el estado completo; solo se emiten los
     # mensajes que no se habían visto todavía.
-    for estado in agent.stream(entrada, config, stream_mode="values"):
+    # durability="sync": cada paso queda guardado ANTES de seguir; así, si la interfaz interrumpe el
+    # turno entre dos pasos, el estado guardado es exactamente el de ese momento (ver discard_turn).
+    for estado in agent.stream(entrada, config, stream_mode="values", durability="sync"):
         yield from eventos(estado["messages"][vistos:])
         vistos = len(estado["messages"])
         if "__interrupt__" in estado:
             acciones = estado["__interrupt__"][0].value["action_requests"]
             yield {"tipo": "aprobacion", "acciones": acciones}
+
+
+def message_count(config: RunnableConfig) -> int:
+    """Cantidad de mensajes guardados de la conversación (marca de dónde empieza un turno)."""
+    return len(saved_state(config).get("messages", []))
+
+
+def discard_turn(config: RunnableConfig, mensajes_antes: int) -> None:
+    """Descarta un turno interrumpido: borra del historial los mensajes agregados desde `mensajes_antes`.
+
+    Si el socio cancela mientras el agente trabaja, el turno puede quedar a medias (por ejemplo, una
+    llamada a una tool sin su resultado, que los proveedores rechazan). Se borra entero, como si el
+    mensaje nunca se hubiera enviado, y el socio puede editarlo y reenviarlo.
+    """
+    sobrantes = saved_state(config).get("messages", [])[mensajes_antes:]
+    if sobrantes:
+        agent.update_state(config, {"messages": [RemoveMessage(id=m.id) for m in sobrantes]})
 
 
 def decision(aprobar: bool, motivo: str = "") -> Command:

@@ -1,0 +1,11 @@
+# Tema de la UI (Streamlit lo lee al iniciar desde esta carpeta). Estilos finos: estilos.css
+[theme]
+base = "dark"
+primaryColor = "#F59E0B"            # acento ámbar
+backgroundColor = "#050505"         # negro profundo
+secondaryBackgroundColor = "#0E0E10"
+textColor = "#ECECEC"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false

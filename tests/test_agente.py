@@ -77,6 +77,51 @@ def test_memoria_conserva_turnos_y_se_reconstruye(armar):
     assert len(ag.saved_state(cfg)["messages"]) == 4
 
 
+def _sin_respuesta(mensajes):
+    """Ids de llamadas a tools que no tienen su resultado (los proveedores de modelos las rechazan)."""
+    resueltas = {m.tool_call_id for m in mensajes if m.type == "tool"}
+    return [c["id"] for m in mensajes if m.type == "ai" for c in m.tool_calls if c["id"] not in resueltas]
+
+
+def _llamada_resumen():
+    return AIMessage(content="", tool_calls=[{"name": "resumen_alquileres", "id": "r1", "args": {}}])
+
+
+@pytest.mark.parametrize("corte, guion", [
+    ("texto", [AIMessage(content="Hola!"), AIMessage(content="Respuesta que se cancela"), AIMessage(content="B")]),
+    ("llamada", [AIMessage(content="Hola!"), _llamada_resumen(), AIMessage(content="B")]),
+    ("resultado", [AIMessage(content="Hola!"), _llamada_resumen(), AIMessage(content="fin"), AIMessage(content="B")]),
+], ids=["tras_la_respuesta", "tras_la_llamada_a_la_tool", "tras_el_resultado_de_la_tool"])
+def test_cancelar_un_turno_a_medias_deja_seguir_la_conversacion(armar, corte, guion):
+    """El socio toca «Detener» y Streamlit corta el turno entre dos pasos: se descarta entero y se puede seguir."""
+    ag, cfg = armar(*guion)
+    list(ag.stream_turn("hola", cfg))
+    antes = ag.message_count(cfg)
+
+    turno = ag.stream_turn("pedido que se cancela", cfg)
+    for e in turno:
+        if e["tipo"] == corte:
+            break                                   # la interfaz abandona el turno acá (no cierra el generador)
+    ag.discard_turn(cfg, antes)
+
+    mensajes = ag.saved_state(cfg)["messages"]
+    assert len(mensajes) == antes and _sin_respuesta(mensajes) == []
+    assert "pedido que se cancela" not in [m.text for m in mensajes]
+
+    list(ag.stream_turn("pedido nuevo", cfg))      # la conversación sigue funcionando
+    mensajes = ag.saved_state(cfg)["messages"]
+    assert [m.type for m in mensajes] == ["human", "ai", "human", "ai"] and _sin_respuesta(mensajes) == []
+    assert mensajes[2].text == "pedido nuevo"
+
+
+def test_descartar_sin_cambios_no_toca_nada(armar):
+    ag, cfg = armar(AIMessage(content="Hola!"))
+    list(ag.stream_turn("hola", cfg))
+    antes = ag.message_count(cfg)
+    ag.discard_turn(cfg, antes)                      # nada que descartar
+    assert ag.message_count(cfg) == antes
+
+
 def test_cambiar_de_modelo_reconstruye_el_agente(agente_mod, monkeypatch):
     monkeypatch.setattr(agente_mod, "agent", agente_mod.agent)       # se restauran al terminar el test
     monkeypatch.setattr(agente_mod, "_modelo", agente_mod._modelo)

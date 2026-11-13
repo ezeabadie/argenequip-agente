@@ -5,15 +5,20 @@ llamada a tool, resultado, texto) y la confirmación humana (Aprobar / Rechazar)
 
 Ejecutar con:  streamlit run app.py
 """
+import threading
+from html import escape
+from pathlib import Path
+
 import streamlit as st
 
 try:
     from agente import (
-        decision, es_limite_de_cuota, list_threads, modelo_actual, new_thread, pending_approval,
-        resume_thread, saved_turns, select_thread, stream_turn, usar_modelo,
+        decision, discard_turn, es_limite_de_cuota, list_threads, message_count, modelo_actual, new_thread,
+        pending_approval, resume_thread, saved_turns, select_thread, stream_turn, usar_modelo,
     )
     from argenequip_client import get_client
     from model import PROVEEDORES, modelo_por_defecto
+    from tools import fecha_ddmmaaaa
 except RuntimeError as e:  # por ejemplo, falta GOOGLE_API_KEY en el .env
     st.error(str(e))
     st.stop()
@@ -22,7 +27,16 @@ PASOS_EXPANDIDOS = True   # False: razonamiento y tools quedan plegados
 ICONOS = {"load_skill": "📖", "buscar_cliente": "🧑‍💼", "buscar_equipos": "🔎",
           "consultar_disponibilidad": "📅", "resumen_alquileres": "📋", "crear_alquiler": "📝"}
 
-st.set_page_config(page_title="ArgenEquip - Asistente", page_icon="🛠️")
+AVATARES = {"user": "👤", "assistant": "🛠️"}
+
+st.set_page_config(page_title="ArgenEquip - Asistente", page_icon="🛠️", initial_sidebar_state="expanded")
+# El tema (colores) está en .streamlit/config.toml; los detalles de estilo, en estilos.css.
+st.html(f"<style>{(Path(__file__).parent / 'estilos.css').read_text(encoding='utf-8')}</style>")
+
+
+def mensaje(rol: str):
+    """Burbuja de chat con el avatar de cada rol ("user" / "assistant")."""
+    return st.chat_message(rol, avatar=AVATARES[rol])
 
 
 # --- Dibujo de eventos ------------------------------------------------------------
@@ -76,13 +90,33 @@ def mensaje_de_error(error: Exception) -> str:
 
 
 def correr(entrada) -> None:
-    """Ejecuta un turno (o la reanudación tras la confirmación) mostrándolo en vivo."""
-    with st.chat_message("assistant"):
-        try:
-            with st.spinner("El agente está trabajando..."):
-                render_eventos(stream_turn(entrada, st.session_state.config))
-        except Exception as e:
-            st.warning(mensaje_de_error(e)) if es_limite_de_cuota(e) else st.error(mensaje_de_error(e))
+    """Ejecuta un turno (o la reanudación tras la confirmación) mostrándolo en vivo.
+
+    Cancelación: mientras corre un mensaje nuevo se muestra «Detener». Al tocarlo, Streamlit arranca un
+    script nuevo y le avisa al viejo que se detenga, pero el viejo no se entera hasta su próxima llamada a
+    Streamlit: antes termina el paso del agente que estaba haciendo (p. ej. la llamada al modelo) y lo guarda.
+    Por eso el script nuevo no puede descartar el turno enseguida: tiene que esperar a que el viejo termine
+    (`terminado`), o el turno reaparecería. Se hace al comienzo del script. La reanudación tras Aprobar no
+    se puede cancelar: la operación ya fue autorizada.
+    """
+    es_mensaje = isinstance(entrada, str)
+    terminado = threading.Event()
+    if es_mensaje:
+        st.session_state.en_curso = (entrada, message_count(st.session_state.config), terminado)
+    try:
+        with mensaje("assistant"):
+            if es_mensaje:
+                st.button("⏹ Detener", key="detener", help="Cancela esta respuesta y te deja editar tu mensaje")
+            try:
+                with st.spinner("El agente está trabajando..."):
+                    render_eventos(stream_turn(entrada, st.session_state.config))
+            except Exception as e:
+                st.warning(mensaje_de_error(e)) if es_limite_de_cuota(e) else st.error(mensaje_de_error(e))
+    finally:
+        terminado.set()   # este script ya no avanza (también si Streamlit lo interrumpió): el nuevo puede seguir
+    # Termino normal (o con error ya mostrado). Si Streamlit interrumpió el turno, no se llega acá
+    # (corta con una excepción que no es `Exception`) y `en_curso` queda marcado.
+    st.session_state.en_curso = None
     st.rerun()   # redibuja todo desde el estado guardado (incluye la confirmación pendiente)
 
 
@@ -90,7 +124,7 @@ def correr(entrada) -> None:
 
 def render_aprobacion(acciones: list[dict]) -> None:
     """Resumen de la escritura pendiente con botones Aprobar / Rechazar."""
-    with st.chat_message("assistant"):
+    with mensaje("assistant"):
         for a in acciones:
             args = a["args"]
             st.warning("**Confirmación requerida** · el asistente quiere ejecutar una operación que modifica el sistema.")
@@ -107,7 +141,7 @@ def render_aprobacion(acciones: list[dict]) -> None:
                     f"### Nuevo alquiler\n"
                     f"- **Título:** {args.get('titulo')}\n"
                     f"- **Cliente (id):** {args.get('cliente_id')} · **Domicilio (id):** {args.get('domicilio_id')}\n"
-                    f"- **Fechas:** {args.get('fecha_inicio')} al {args.get('fecha_fin')}\n"
+                    f"- **Fechas:** {fecha_ddmmaaaa(args.get('fecha_inicio'))} al {fecha_ddmmaaaa(args.get('fecha_fin'))}\n"
                     f"- **Valor total:** {monto}\n"
                     f"- **Equipos:**\n{equipos}"
                 )
@@ -126,7 +160,7 @@ def render_aprobacion(acciones: list[dict]) -> None:
 
 def render_modelo() -> None:
     """Selector de proveedor y modelo: reconstruye el agente (la memoria de las conversaciones se conserva)."""
-    st.header("Modelo")
+    seccion("Modelo")
     ids = list(PROVEEDORES)
     en_uso = modelo_actual()
     proveedor = st.selectbox("Proveedor", ids, format_func=PROVEEDORES.get, key="proveedor",
@@ -143,10 +177,17 @@ def render_modelo() -> None:
     st.caption(f"En uso: `{modelo_actual()[1]}`")
 
 
+def seccion(titulo: str) -> None:
+    """Rótulo pequeño en mayúsculas para separar bloques de la barra lateral."""
+    st.html(f'<div class="seccion">{escape(titulo)}</div>')
+
+
 def render_sidebar() -> None:
     actual = st.session_state.config["configurable"]["thread_id"]
     with st.sidebar:
-        st.header("Comandos")
+        st.html('<div class="marca-lateral">🛠️ Argen<span>Equip</span></div>'
+                '<div class="sub-lateral">Asistente de alquileres</div>')
+        seccion("Comandos")
         if st.button("📝 nuevo", use_container_width=True, help="Crea un alquiler paso a paso"):
             st.session_state.entrada = "nuevo"
             st.rerun()
@@ -158,8 +199,8 @@ def render_sidebar() -> None:
 
         render_modelo()
 
-        st.header("Conversaciones")
-        if st.button("➕ Nueva conversación", disabled=not saved_turns(st.session_state.config)):
+        seccion("Conversaciones")
+        if st.button("➕ Nueva conversación", disabled=not saved_turns(st.session_state.config), use_container_width=True):
             st.session_state.config = new_thread()
             st.rerun()
         for thread_id, titulo in list_threads():
@@ -168,33 +209,79 @@ def render_sidebar() -> None:
                 st.rerun()
 
 
+def render_cabecera() -> None:
+    """Marca arriba del chat (queda a la vista aunque se oculte la barra lateral) y qué modelo/sistema se usa."""
+    proveedor, nombre = modelo_actual()
+    es_api = type(get_client()).__name__ == "HttpClient"
+    modo = ('<span class="chip ok">● Sistema real (API)</span>' if es_api
+            else '<span class="chip demo">● Datos de demo</span>')
+    st.html('<div class="cabecera">'
+            '<div class="marca">🛠️ ArgenEquip<small>Asistente de alquileres</small></div>'
+            f'<div class="chips">{modo}<span class="chip">{escape(PROVEEDORES.get(proveedor, proveedor))} · {escape(nombre)}</span></div>'
+            '</div>')
+
+
+def render_bienvenida() -> None:
+    """Pantalla inicial (conversación vacía): qué se puede hacer, con atajos."""
+    st.html('<div class="hero"><h1>¿Qué querés hacer hoy?</h1>'
+            '<p>Creá alquileres y consultá el estado de tu negocio escribiendo en lenguaje natural, '
+            'o empezá con uno de estos atajos.</p></div>')
+    c1, c2 = st.columns(2)
+    if c1.button("**📝 Nuevo alquiler**  \nArmalo paso a paso: cliente, equipos, fechas y confirmación.",
+                 key="hero_nuevo", use_container_width=True):
+        st.session_state.entrada = "nuevo"
+        st.rerun()
+    if c2.button("**📋 Resumen**  \nAlquileres activos con equipos, valor y estado de pago.",
+                 key="hero_resumen", use_container_width=True):
+        st.session_state.entrada = "resumen"
+        st.rerun()
+    st.html('<div class="ejemplo">También podés escribir, por ejemplo: '
+            '<q>Quiero alquilarle a Pérez una hormigonera del 24 al 28 por 120000</q></div>')
+
+
 if "config" not in st.session_state:
     st.session_state.config = resume_thread()
 config = st.session_state.config
+
+# ¿Quedó un turno a medias? Pasa si el socio tocó «Detener» (o cualquier otro control) mientras el agente
+# trabajaba: Streamlit cortó el script anterior antes de que borrara `en_curso`. Se descarta ese turno del
+# historial y el mensaje vuelve a la caja de chat para que se pueda editar y reenviar.
+interrumpido = st.session_state.pop("en_curso", None)
+if interrumpido:
+    texto, mensajes_antes, terminado = interrumpido
+    with st.spinner("Cancelando: se termina el paso que estaba en curso…"):
+        terminado.wait(timeout=120)   # el script anterior sigue vivo hasta su próxima llamada a Streamlit
+    discard_turn(config, mensajes_antes)
+    st.session_state["chat"] = texto   # precarga la caja (la key es la de st.chat_input de más abajo)
+    st.toast("Respuesta cancelada. Editá tu mensaje y reenviálo cuando quieras.", icon="⏹️")
+
 acciones = pending_approval(config)
 
-# Entrada pendiente: un mensaje escrito, un botón de la barra lateral, o la decisión Aprobar/Rechazar.
+# Entrada pendiente: un botón de la barra lateral o la decisión Aprobar/Rechazar (más abajo, un mensaje escrito).
 entrada = st.session_state.pop("entrada", None)
 
-# La caja de chat es LO PRIMERO que se dibuja (aunque en pantalla va abajo) y queda bloqueada mientras
-# el agente trabaja. Si se dibujara después de la barra lateral y del historial, durante ese redibujado
-# seguiría en pantalla la de la corrida anterior, todavía habilitada.
-# Lo escrito se guarda como `entrada` y se reinicia el script: el turno arranca con la caja ya bloqueada.
-if prompt := st.chat_input("Escribí un comando o tu consulta...", disabled=bool(acciones) or entrada is not None):
-    st.session_state.entrada = prompt
-    st.rerun()
+# La caja de chat es LO PRIMERO que se dibuja (aunque en pantalla va abajo). `submit_mode="disable"` hace que
+# el navegador la bloquee en el instante en que se envía un mensaje y la libere cuando el turno termina; si
+# el turno lo disparó un atajo o Aprobar/Rechazar, la bloquea `disabled`.
+prompt = st.chat_input("Escribí un comando o tu consulta...", key="chat", submit_mode="disable",
+                       disabled=bool(acciones) or entrada is not None)
+if isinstance(prompt, str):
+    entrada = prompt
 
-st.title("🛠️ ArgenEquip · Asistente")
 render_sidebar()
+render_cabecera()
 
 # Streamlit re-ejecuta todo el script en cada interacción: se redibuja la conversación guardada.
-for pregunta, eventos in saved_turns(config):
-    st.chat_message("user").markdown(pregunta)
-    with st.chat_message("assistant"):
+turnos = saved_turns(config)
+if not turnos and entrada is None and not acciones:
+    render_bienvenida()
+for pregunta, eventos in turnos:
+    mensaje("user").markdown(pregunta)
+    with mensaje("assistant"):
         render_eventos(eventos)
 
 if isinstance(entrada, str):
-    st.chat_message("user").markdown(entrada)
+    mensaje("user").markdown(entrada)
 
 if entrada is not None:
     correr(entrada)

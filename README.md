@@ -10,7 +10,7 @@ Comandos disponibles hoy:
 | `resumen` | Muestra todos los alquileres activos con sus equipos, valor y estado de pago. |
 | `cancelar` | Cancela la operación en curso (en la UI: botón *Rechazar* de la confirmación). |
 
-Se pueden escribir como comando suelto (`resumen`) o en una frase libre (*«Quiero alquilarle a Pérez una hormigonera del 24 al 28 por 120000»*).
+Se pueden escribir como comando suelto (`resumen`) o en una frase libre (*«Quiero alquilarle a Pérez una hormigonera del 24 al 28 por 120000»*). Las fechas se piden y se muestran siempre en formato **DD-MM-AAAA** (por ejemplo `24-11-2026`); hacia el backend viajan en ISO.
 
 ## Arquitectura
 
@@ -99,9 +99,10 @@ Se abre en <http://localhost:8501>. En la pantalla vas a ver, en vivo mientras e
 - 💭 el **razonamiento** del modelo (desplegable),
 - cada **tool invocada** con sus argumentos y su resultado, en orden,
 - la respuesta en markdown,
-- cuando una operación modifica el sistema, una tarjeta de **confirmación** con los botones **Aprobar** / **Rechazar**.
+- cuando una operación modifica el sistema, una tarjeta de **confirmación** con los botones **Aprobar** / **Rechazar**,
+- un botón **⏹ Detener** mientras el agente trabaja: cancela la respuesta, borra ese turno del historial y te devuelve tu mensaje en la caja para **editarlo y reenviarlo**. Mientras el agente trabaja la caja de chat queda bloqueada.
 
-La barra lateral tiene atajos para `nuevo` y `resumen`, el **selector de proveedor y modelo** (Gemini u OpenRouter; el nombre del modelo es editable) y la lista de conversaciones (cada una conserva su memoria, también si cambiás de modelo a mitad de camino). Si falta la clave del proveedor elegido, la UI avisa y sigue con el modelo anterior.
+La interfaz usa un tema oscuro (`.streamlit/config.toml` + `estilos.css`) y muestra una pantalla de bienvenida con atajos cuando la conversación está vacía. La barra lateral se **oculta y se vuelve a abrir** con la flecha de su esquina superior (« / »). Tiene atajos para `nuevo` y `resumen`, el **selector de proveedor y modelo** (Gemini u OpenRouter; el nombre del modelo es editable) y la lista de conversaciones (cada una conserva su memoria, también si cambiás de modelo a mitad de camino). Si falta la clave del proveedor elegido, la UI avisa y sigue con el modelo anterior.
 
 ### Consola
 
@@ -134,6 +135,8 @@ Los tests **no usan la API de Gemini** (el modelo se reemplaza por uno falso) ni
 
 ```
 ├── app.py                 # UI Streamlit: eventos en vivo + botones de aprobación
+├── estilos.css            # estilos de la UI (burbujas, tarjetas, botones, caja de chat)
+├── .streamlit/config.toml # tema oscuro (colores)
 ├── agente.py              # create_agent, system prompt, HITL, checkpointer, streaming
 ├── tools.py               # tools del agente (todas capturan sus errores)
 ├── model.py               # fábrica del modelo (Gemini + respaldo OpenRouter/Groq)
@@ -165,6 +168,7 @@ Los tests **no usan la API de Gemini** (el modelo se reemplaza por uno falso) ni
 ## Limitaciones conocidas
 
 - **Privacidad:** en el plan gratuito, Google puede usar los datos enviados a Gemini para mejorar sus modelos. Por eso la demo usa clientes ficticios. El backend no se expone a internet: solo viaja a la nube lo que el agente lee en sus tools.
+- **Cancelar no es instantáneo:** Streamlit no puede abortar una llamada al modelo a mitad de camino. Al tocar **Detener**, la interfaz espera a que termine el paso que estaba en curso (normalmente unos segundos) y recién entonces descarta el turno. La reanudación después de **Aprobar** no se puede cancelar: la operación ya fue autorizada.
 - **Calidad según el modelo:** el flujo `nuevo` necesita un modelo con *tool calling* confiable. Los modelos gratuitos de OpenRouter pueden equivocar argumentos o ser lentos y tener cupos bajos; Gemini es el modelo con el que se probó la demo. El modelo elegido es global del proceso de Streamlit (pensado para un solo usuario local).
 - **Razonamiento en inglés:** los resúmenes de razonamiento de Gemini suelen venir en inglés aunque la respuesta sea en español. Con otros proveedores el razonamiento puede no estar disponible (la UI igualmente muestra cada tool y su resultado).
 - **Límites del plan gratuito:** si se supera la cuota, la UI muestra un aviso (429); si el modelo está saturado, otro (503). Se reintenta automáticamente hasta 4 veces antes de avisar.
