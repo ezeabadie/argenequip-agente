@@ -62,11 +62,13 @@ pip install -r requirements.txt
 
 | Variable | Descripción |
 |---|---|
-| `GOOGLE_API_KEY` | Clave de Gemini (obligatoria si usás Gemini). |
-| `OPENROUTER_API_KEY` | Clave de OpenRouter (<https://openrouter.ai/keys>); solo si elegís ese proveedor. |
-| `MODEL_PROVIDER` | Proveedor con el que arranca la app: `google_genai` (por defecto) u `openrouter`. Se cambia después desde la barra lateral. |
+| `GOOGLE_API_KEY` | Clave de Gemini (obligatoria si usás Gemini). Admite **varias separadas por coma** (`clave1,clave2`): si una se queda sin cupo, el agente pasa solo a la siguiente (la barra lateral muestra *Clave N de M*, nunca la clave). Usá solo claves propias o con permiso de su dueño, y respetá los términos del proveedor. |
+| `OPENROUTER_API_KEY` | Clave de OpenRouter (<https://openrouter.ai/keys>); solo si elegís ese proveedor. También admite varias separadas por coma. |
+| `GROQ_API_KEY` | Clave de Groq (<https://console.groq.com/keys>); solo si elegís ese proveedor. También admite varias separadas por coma. |
+| `MODEL_PROVIDER` | Proveedor con el que arranca la app: `google_genai` (por defecto), `openrouter` o `groq`. Se cambia después desde la barra lateral. |
 | `MODEL_NAME` | Modelo de Gemini. Por defecto `gemini-3.5-flash`, que devuelve el razonamiento que muestra la UI. |
 | `OPENROUTER_MODEL` | Slug del modelo de OpenRouter (los gratuitos terminan en `:free`). Tiene que soportar *tool calling*. |
+| `GROQ_MODEL` | Id del modelo de Groq. Por defecto `llama-3.3-70b-versatile`. Tiene que soportar *tool calling*. |
 | `ARGENEQUIP_MODE` | `mock` (datos de prueba en memoria) o `api` (backend real). |
 | `ARGENEQUIP_BASE_URL` | Solo modo `api`. Ej.: `http://localhost:8080`. |
 | `ARGENEQUIP_USER` / `ARGENEQUIP_PASSWORD` | Solo modo `api`. Credenciales de un usuario SOCIO. |
@@ -103,7 +105,7 @@ Se abre en <http://localhost:8501>. En la pantalla vas a ver, en vivo mientras e
 - cuando una operación modifica el sistema, una tarjeta de **confirmación** con los botones **Aprobar** / **Rechazar**,
 - un botón **⏹ Detener** mientras el agente trabaja: cancela la respuesta, borra ese turno del historial y te devuelve tu mensaje en la caja para **editarlo y reenviarlo**. Mientras el agente trabaja la caja de chat queda bloqueada.
 
-La interfaz usa un tema oscuro (`.streamlit/config.toml` + `estilos.css`) y muestra una pantalla de bienvenida con atajos cuando la conversación está vacía. La barra lateral se **oculta y se vuelve a abrir** con la flecha de su esquina superior (« / »). Tiene atajos para `nuevo` y `resumen`, el **selector de proveedor y modelo** (Gemini u OpenRouter; el nombre del modelo es editable) y la lista de conversaciones (cada una conserva su memoria, también si cambiás de modelo a mitad de camino). Si falta la clave del proveedor elegido, la UI avisa y sigue con el modelo anterior.
+La interfaz usa un tema oscuro (`.streamlit/config.toml` + `estilos.css`) y muestra una pantalla de bienvenida con atajos cuando la conversación está vacía. La barra lateral se **oculta y se vuelve a abrir** con la flecha de su esquina superior (« / »). Tiene atajos para `nuevo` y `resumen`, el **selector de proveedor y modelo** (Gemini, OpenRouter o Groq; el nombre del modelo es editable) y la lista de conversaciones (cada una conserva su memoria, también si cambiás de modelo a mitad de camino). Si falta la clave del proveedor elegido, la UI avisa y sigue con el modelo anterior.
 
 ### Consola
 
@@ -141,7 +143,7 @@ Los tests **no usan la API de Gemini** (el modelo se reemplaza por uno falso) ni
 ├── .streamlit/config.toml # tema oscuro (colores)
 ├── agente.py              # create_agent, system prompt, HITL, checkpointer, streaming
 ├── tools.py               # tools del agente (todas capturan sus errores)
-├── model.py               # fábrica del modelo (Gemini + respaldo OpenRouter/Groq)
+├── model.py               # fábrica del modelo (Gemini, OpenRouter o Groq; varias claves por proveedor)
 ├── argenequip_client.py   # interfaz + cliente HTTP + cliente mock
 ├── skills/                # conocimiento bajo demanda (markdown)
 ├── tests/                 # mock, tools, cliente HTTP y agente (con modelo falso)

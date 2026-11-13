@@ -168,6 +168,7 @@ def test_descartar_sin_cambios_no_toca_nada(armar):
 def test_cambiar_de_modelo_reconstruye_el_agente(agente_mod, monkeypatch):
     monkeypatch.setattr(agente_mod, "agent", agente_mod.agent)       # se restauran al terminar el test
     monkeypatch.setattr(agente_mod, "_modelo", agente_mod._modelo)
+    monkeypatch.setattr(agente_mod, "_rotador", agente_mod._rotador)
     monkeypatch.setenv("OPENROUTER_API_KEY", "clave-falsa")
     antes = agente_mod.agent
     agente_mod.usar_modelo("openrouter", "proveedor/modelo:free")
@@ -181,6 +182,7 @@ def test_cambiar_de_modelo_reconstruye_el_agente(agente_mod, monkeypatch):
 def test_cambiar_de_modelo_sin_clave_falla_y_conserva_el_anterior(agente_mod, monkeypatch):
     monkeypatch.setattr(agente_mod, "agent", agente_mod.agent)
     monkeypatch.setattr(agente_mod, "_modelo", agente_mod._modelo)
+    monkeypatch.setattr(agente_mod, "_rotador", agente_mod._rotador)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     antes, modelo = agente_mod.agent, agente_mod.modelo_actual()
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
@@ -229,3 +231,96 @@ def test_otros_errores_del_modelo_se_clasifican(agente_mod):
     assert c(Exception("402 Payment Required: insufficient credits")) == "credito"
     tipo, titulo, detalle = agente_mod.explicar_error(ValueError("algo raro"))
     assert (tipo, titulo) == ("otro", "El agente falló") and "algo raro" in detalle
+
+
+# --- Varias claves del mismo proveedor ----------------------------------------------
+
+LLAMADAS = {"sin_cupo": 0, "roto": 0}
+
+
+class SinCupo(FakeModel):
+    """Una clave que ya gastó su cupo."""
+    def _generate(self, *args, **kwargs):
+        LLAMADAS["sin_cupo"] += 1
+        raise Exception("429 RESOURCE_EXHAUSTED: quota exceeded")
+
+
+class Roto(FakeModel):
+    """Falla por algo que NO es de cupo."""
+    def _generate(self, *args, **kwargs):
+        LLAMADAS["roto"] += 1
+        raise ValueError("boom")
+
+
+def _agente_con_claves(agente_mod, *modelos):
+    from model import RotarClaves
+    saver = SqliteSaver(sqlite3.connect(":memory:", check_same_thread=False))
+    rotador = RotarClaves(list(modelos))
+    agente_mod.agent = agente_mod.build_agent(modelos[0], saver, rotador)
+    return rotador, {"configurable": {"thread_id": "t"}}
+
+
+def test_claves_separadas_por_coma(monkeypatch):
+    import model
+    monkeypatch.setenv("GOOGLE_API_KEY", " clave-a , clave-b\n,clave-c,")
+    assert model.claves("google_genai") == ["clave-a", "clave-b", "clave-c"]
+    assert len(model.get_models("google_genai")) == 3
+    monkeypatch.setenv("GOOGLE_API_KEY", "")
+    assert model.claves("google_genai") == [] and "GOOGLE_API_KEY" in model.falta_clave("google_genai")
+
+
+def test_cada_modelo_usa_su_propia_clave(monkeypatch):
+    import model
+    monkeypatch.setenv("GOOGLE_API_KEY", "clave-a,clave-b")
+    usadas = [m.google_api_key.get_secret_value() for m in model.get_models("google_genai")]
+    assert usadas == ["clave-a", "clave-b"]
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-a, gsk-b")
+    groq = model.get_models("groq")
+    assert [m.groq_api_key.get_secret_value() for m in groq] == ["gsk-a", "gsk-b"]
+    assert groq[0].model_name == model.modelo_por_defecto("groq")
+
+
+def test_groq_aparece_en_el_selector_y_pide_su_clave(monkeypatch):
+    import model
+    assert "groq" in model.PROVEEDORES
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    assert "GROQ_API_KEY" in model.falta_clave("groq")
+
+
+def test_espera_sugerida_de_groq(agente_mod):
+    _, _, detalle = agente_mod.explicar_error(Exception(
+        "429 rate_limit_exceeded: Rate limit reached for tokens per day (TPD). Please try again in 7m12.5s."))
+    assert "DIARIO" in detalle and "8 min" not in detalle and "7 min" in detalle
+
+
+def test_pasa_a_la_siguiente_clave_cuando_se_agota_el_cupo(agente_mod, monkeypatch):
+    monkeypatch.setattr(agente_mod, "agent", agente_mod.agent)
+    LLAMADAS.update(sin_cupo=0, roto=0)
+    rotador, cfg = _agente_con_claves(agente_mod, SinCupo(messages=iter([])),
+                                      FakeModel(messages=iter([AIMessage(content="Respondió la 2da"),
+                                                               AIMessage(content="Otra vez la 2da")])))
+    evs = list(agente_mod.stream_turn("hola", cfg))
+    assert evs[-1]["texto"] == "Respondió la 2da" and rotador.actual == 1
+    list(agente_mod.stream_turn("de nuevo", cfg))
+    assert LLAMADAS["sin_cupo"] == 1          # recuerda cuál anda: no vuelve a probar la agotada
+
+
+def test_si_se_agotan_todas_las_claves_falla_con_error_de_cuota(agente_mod, monkeypatch):
+    monkeypatch.setattr(agente_mod, "agent", agente_mod.agent)
+    monkeypatch.setattr(agente_mod, "_rotador", agente_mod._rotador)
+    LLAMADAS.update(sin_cupo=0, roto=0)
+    rotador, cfg = _agente_con_claves(agente_mod, SinCupo(messages=iter([])), SinCupo(messages=iter([])))
+    agente_mod._rotador = rotador
+    with pytest.raises(Exception) as e:
+        list(agente_mod.stream_turn("hola", cfg))
+    assert agente_mod.es_limite_de_cuota(e.value) and LLAMADAS["sin_cupo"] == 2   # probó las dos
+    assert "Se probaron las 2 claves" in agente_mod.explicar_error(e.value)[2]
+
+
+def test_no_rota_ante_errores_que_no_son_de_cupo(agente_mod, monkeypatch):
+    monkeypatch.setattr(agente_mod, "agent", agente_mod.agent)
+    LLAMADAS.update(sin_cupo=0, roto=0)
+    rotador, cfg = _agente_con_claves(agente_mod, Roto(messages=iter([])), FakeModel(messages=iter([AIMessage(content="x")])))
+    with pytest.raises(ValueError):
+        list(agente_mod.stream_turn("hola", cfg))
+    assert rotador.actual == 0 and LLAMADAS["roto"] == 1                         # no pasó a la siguiente

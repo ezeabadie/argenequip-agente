@@ -24,7 +24,9 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
-from model import PROVEEDORES, get_model, modelo_por_defecto, proveedor_por_defecto
+from model import (
+    PROVEEDORES, RotarClaves, claves, clasificar_error, get_models, modelo_por_defecto, proveedor_por_defecto,
+)
 from tools import TOOLS, WRITE_TOOLS, listar_skills
 
 # La fecha se fija al iniciar el programa (suficiente para una sesión de demo).
@@ -55,16 +57,17 @@ cuando tengas todos los datos y, si el socio la rechaza, preguntale qué quiere 
 DIR = Path(__file__).parent
 CONV_FILE = DIR / "conversaciones.txt"   # un thread_id por línea; el último es el activo
 
-# Único middleware: confirmación humana en las tools de ESCRITURA. Justificación: crear un
-# alquiler modifica el sistema real y es difícil de deshacer; el interrupt del grafo
-# garantiza la pausa, un prompt no (el modelo podría ignorarlo).
-def build_agent(model, checkpointer):
+# Middleware: (1) confirmación humana en las tools de ESCRITURA. Justificación: crear un alquiler
+# modifica el sistema real y es difícil de deshacer; el interrupt del grafo garantiza la pausa, un
+# prompt no (el modelo podría ignorarlo). (2) Si hay varias claves del proveedor, RotarClaves pasa a
+# la siguiente cuando una se queda sin cupo (ver model.py).
+def build_agent(model, checkpointer, rotador: RotarClaves | None = None):
     """Arma el agente. Separado del `agent` global para poder probarlo con un modelo falso."""
     return create_agent(
         model=model,
         tools=TOOLS,
         system_prompt=SYSTEM_PROMPT,
-        middleware=[HumanInTheLoopMiddleware(
+        middleware=([rotador] if rotador else []) + [HumanInTheLoopMiddleware(
             interrupt_on={t.name: {"allowed_decisions": ["approve", "reject"]} for t in WRITE_TOOLS},
             description_prefix="Se necesita tu confirmación",
         )],
@@ -72,10 +75,17 @@ def build_agent(model, checkpointer):
     )
 
 
+def _armar(proveedor: str, nombre: str):
+    """(agente, rotador) para un proveedor y modelo; el rotador es None si hay una sola clave."""
+    modelos = get_models(proveedor, nombre)
+    rotador = RotarClaves(modelos) if len(modelos) > 1 else None
+    return build_agent(modelos[0], CHECKPOINTER, rotador), rotador
+
+
 # El checkpointer es uno solo: al cambiar de modelo las conversaciones guardadas se conservan.
 CHECKPOINTER = SqliteSaver(sqlite3.connect(DIR / "memoria.db", check_same_thread=False))
 _modelo = (proveedor_por_defecto(), modelo_por_defecto(proveedor_por_defecto()))   # (proveedor, nombre) en uso
-agent = build_agent(get_model(*_modelo), CHECKPOINTER)
+agent, _rotador = _armar(*_modelo)
 
 
 def modelo_actual() -> tuple[str, str]:
@@ -83,13 +93,20 @@ def modelo_actual() -> tuple[str, str]:
     return _modelo
 
 
+def claves_en_uso() -> tuple[int, int]:
+    """(número de la clave en uso, cantidad de claves) del proveedor actual. Nunca expone las claves."""
+    if _rotador:
+        return _rotador.actual + 1, len(_rotador.modelos)
+    return 1, max(1, len(claves(_modelo[0])))
+
+
 def usar_modelo(proveedor: str, nombre: str) -> None:
     """Cambia el modelo del agente. Si falla (p. ej. falta la clave) deja el anterior y lanza RuntimeError."""
-    global agent, _modelo
+    global agent, _rotador, _modelo
     if (proveedor, nombre) == _modelo:
         return
-    agent = build_agent(get_model(proveedor, nombre), CHECKPOINTER)   # si falla, no se toca nada
-    _modelo = (proveedor, nombre)
+    nuevo_agente, nuevo_rotador = _armar(proveedor, nombre)   # si falla, no se toca nada
+    agent, _rotador, _modelo = nuevo_agente, nuevo_rotador, (proveedor, nombre)
 
 
 # --- Conversaciones (patrón de la cátedra) -----------------------------------
@@ -269,24 +286,6 @@ def saved_turns(config: RunnableConfig, hasta: int | None = None) -> list[tuple[
     return turnos
 
 
-def clasificar_error(error: Exception) -> str:
-    """Qué le pasó al modelo: "cuota", "credito", "saturado", "clave" u "otro" (se mira el nombre y el texto del error)."""
-    texto = f"{type(error).__name__} {error}".lower()
-
-    def hay(*pistas: str) -> bool:
-        return any(p in texto for p in pistas)
-
-    if hay("429", "resource_exhausted", "rate limit", "ratelimit", "quota", "too many requests", "toomanyrequests"):
-        return "cuota"
-    if hay("402", "payment required", "insufficient credit", "insufficient funds"):
-        return "credito"
-    if hay("503", "unavailable", "overloaded"):
-        return "saturado"
-    if hay("401", "403", "api key", "api_key", "unauthorized", "permission_denied", "authentication"):
-        return "clave"
-    return "otro"
-
-
 def es_limite_de_cuota(error: Exception) -> bool:
     """¿El error es un 429 / cuota agotada del proveedor?"""
     return clasificar_error(error) == "cuota"
@@ -294,7 +293,8 @@ def es_limite_de_cuota(error: Exception) -> bool:
 
 def _espera_sugerida(error: Exception) -> str | None:
     """'12 h 39 min' si el proveedor dice cuándo se libera el cupo (Gemini: «Please retry in 12h39m48s»)."""
-    m = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", str(error), re.IGNORECASE)
+    # Gemini: «Please retry in 12h39m48s»; Groq: «Please try again in 7m12.5s»
+    m = re.search(r"(?:retry|try again) in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", str(error), re.IGNORECASE)
     if not m or not any(m.groups()):
         return None
     horas, minutos, segundos = int(m[1] or 0), int(m[2] or 0), float(m[3] or 0)
@@ -316,8 +316,10 @@ def explicar_error(error: Exception) -> tuple[str, str, str]:
                  else "El plan gratuito permite pocas llamadas por minuto. ")
         espera = _espera_sugerida(error)
         cuando = f"Se libera en aproximadamente {espera}. " if espera else "Esperá un momento y reintentá. "
+        n_claves = claves_en_uso()[1]
+        probadas = f"Se probaron las {n_claves} claves configuradas. " if n_claves > 1 else ""
         return (tipo, "Se agotó el uso del modelo",
-                f"{quien} rechazó el pedido por límite de uso. {causa}{cuando}"
+                f"{quien} rechazó el pedido por límite de uso. {probadas}{causa}{cuando}"
                 "Mientras tanto podés elegir otro proveedor o modelo en la barra lateral (sección Modelo).")
     if tipo == "credito":
         return (tipo, "Sin crédito en el proveedor",
@@ -327,7 +329,7 @@ def explicar_error(error: Exception) -> tuple[str, str, str]:
                 f"{quien} no pudo atender el pedido ahora. Reintentá en unos segundos o elegí otro modelo en la barra lateral.")
     if tipo == "clave":
         return (tipo, "Problema con la clave del proveedor",
-                f"{quien} rechazó las credenciales. Revisá la clave en el .env (GOOGLE_API_KEY / OPENROUTER_API_KEY) "
+                f"{quien} rechazó las credenciales. Revisá la clave en el .env (GOOGLE_API_KEY / OPENROUTER_API_KEY / GROQ_API_KEY) "
                 "y reiniciá la aplicación.")
     return (tipo, "El agente falló", f"{type(error).__name__}: {str(error)[:300]}")
 

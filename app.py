@@ -12,7 +12,7 @@ import streamlit as st
 
 try:
     from agente import (
-        TurnoEnCurso, decision, discard_turn, explicar_error, list_threads, modelo_actual, new_thread,
+        TurnoEnCurso, claves_en_uso, decision, discard_turn, explicar_error, list_threads, modelo_actual, new_thread,
         pending_approval, resume_thread, saved_turns, select_thread, stream_turn, usar_modelo,
     )
     from argenequip_client import get_client
@@ -197,6 +197,9 @@ def render_modelo() -> None:
     except Exception as e:   # falta la clave, paquete sin instalar, nombre inválido...
         st.error(f"No se pudo usar ese modelo: {e}")
     st.caption(f"En uso: `{modelo_actual()[1]}`")
+    n_clave, n_claves = claves_en_uso()
+    if n_claves > 1:   # solo el número: las claves nunca se muestran
+        st.caption(f"🔑 Clave {n_clave} de {n_claves} (cambia sola cuando una se queda sin cupo)")
 
 
 def seccion(titulo: str) -> None:
