@@ -1,4 +1,4 @@
-"""Tools del agente ArgenEquip (alcance actual: comandos `nuevo`, `resumen` e `historial`).
+"""Tools del agente ArgenEquip (alcance actual: comandos `nuevo`, `resumen`, `historial` y `contrato`).
 
 Reglas comunes a todas:
 - El docstring es lo que ve el modelo para decidir cuándo usarla; los argumentos tienen tipos.
@@ -18,9 +18,11 @@ from langchain.tools import tool
 from pydantic import BaseModel, Field
 
 from argenequip_client import ESTADOS_CERRADOS, ArgenEquipError, get_client
+from contrato import armar_contrato
 
 BASE_DIR = Path(__file__).resolve().parent
 SKILLS_DIR = BASE_DIR / "skills"
+CONTRATOS_DIR = BASE_DIR / "contratos"   # PDF generados (tienen datos de clientes: no se versionan)
 
 
 # --- Utilidades ---------------------------------------------------------------
@@ -197,6 +199,51 @@ def alquileres_de_cliente(cliente_id: int) -> str:
             + f"\nTotales (sin contar cancelados): valor {_monto(valor)} | pagado {_monto(pagado)} | saldo {_monto(saldo)}")
 
 
+# --- Comando `contrato` ---------------------------------------------------------------
+
+@tool
+@seguro
+def generar_contrato_pdf(alquiler_id: int) -> str:
+    """Comando «contrato»: genera el PDF del contrato de UN alquiler existente y lo guarda en la carpeta contratos/.
+
+    Los datos (cliente, equipos, fechas, montos, pagos) salen del sistema, no del modelo, y las cláusulas
+    son fijas. Recibe el id del alquiler, que sale de resumen_alquileres o alquileres_de_cliente (nunca
+    inventarlo). No modifica el sistema: solo crea, o reemplaza, un archivo local.
+    """
+    c = get_client()
+    a = c.ver_alquiler(alquiler_id)
+    if a["estado"] == "CANCELADO":
+        return f"ERROR: el alquiler #{alquiler_id} está CANCELADO: no corresponde generar un contrato."
+    # DNI, teléfono y correo no vienen en el detalle del alquiler: se buscan en el cliente (por su id).
+    cliente = next((x for x in c.buscar_clientes(a["clienteNombre"]) if x["id"] == a["clienteId"]), {})
+    datos = {
+        "numero": a["id"],
+        "titulo": a.get("titulo") or "(sin título)",
+        "emision": fecha_ddmmaaaa(date.today()),
+        "cliente": {"nombre": a["clienteNombre"], "dni": cliente.get("dni"),
+                    "telefono": cliente.get("telefono"), "mail": cliente.get("mail") or a.get("clienteMail")},
+        "domicilio": f"{a['domicilioCalle']} {a['domicilioNumero']}",
+        "inicio": fecha_ddmmaaaa(a["fechaInicio"]),
+        "fin": fecha_ddmmaaaa(a["fechaFinEstimada"]),
+        "equipos": [(d["herramientaNombre"], str(d["cantidadPrestada"])) for d in a["detalles"]],
+        "monto_total": _monto(a["montoTotal"]),
+        "pagado": _monto(a["montoPagado"]),
+        "saldo": _monto(a["saldoPendiente"]),
+        "pagos": [(fecha_ddmmaaaa(str(p["fechaHoraPago"])[:10]), _monto(p["monto"]), p.get("nroComprobante") or "-")
+                  for p in a.get("pagos", [])],
+        "descripcion": a.get("descripcion"),
+    }
+    CONTRATOS_DIR.mkdir(exist_ok=True)
+    ruta = CONTRATOS_DIR / f"contrato-alquiler-{a['id']}.pdf"
+    ruta.write_bytes(armar_contrato(datos))
+    faltan = [n for n, k in (("DNI", "dni"), ("teléfono", "telefono"), ("correo", "mail")) if not datos["cliente"][k]]
+    aviso = f"\nDatos del cliente que no están cargados en el sistema (figuran como «No informado»): {', '.join(faltan)}." if faltan else ""
+    return (f"PDF generado: contratos/{ruta.name}\n"
+            f"Contrato N° {a['id']} «{datos['titulo']}» | cliente: {a['clienteNombre']} | {datos['inicio']} a {datos['fin']} | "
+            f"equipos: {', '.join(f'{q} x {n}' for n, q in datos['equipos'])} | "
+            f"valor {datos['monto_total']} | pagado {datos['pagado']} | saldo {datos['saldo']}{aviso}")
+
+
 # --- ESCRITURA (con confirmación humana) ------------------------------------------
 
 @tool
@@ -252,6 +299,6 @@ def load_skill(nombre: str) -> str:
 # --- Registro ---------------------------------------------------------------------
 
 READ_TOOLS = [buscar_cliente, buscar_equipos, consultar_disponibilidad, resumen_alquileres, alquileres_de_cliente,
-              load_skill]
+              generar_contrato_pdf, load_skill]   # generar_contrato_pdf solo crea un archivo local: no toca el sistema
 WRITE_TOOLS = [crear_alquiler]   # las únicas con confirmación humana (HITL)
 TOOLS = READ_TOOLS + WRITE_TOOLS

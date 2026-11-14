@@ -19,7 +19,7 @@ from uuid import uuid4
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
-from langchain_core.messages import RemoveMessage
+from langchain_core.messages import RemoveMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
@@ -38,7 +38,7 @@ La fecha de hoy es {HOY:%d-%m-%Y} (DD-MM-AAAA). Usala para interpretar fechas co
 FECHAS: con el socio usá SIEMPRE el formato DD-MM-AAAA (día primero, por ejemplo 24-11-2026): cuando le pidas \
 una fecha, pedísela en ese formato, y mostrale las fechas así. Las tools también reciben DD-MM-AAAA.
 
-COMANDOS (el socio puede escribirlos solos o como frase libre): nuevo, resumen, historial, cancelar.
+COMANDOS (el socio puede escribirlos solos o como frase libre): nuevo, resumen, historial, contrato, cancelar.
 Antes de ejecutar un comando, cargá su skill con load_skill y seguí su procedimiento. Skills disponibles: {listar_skills()}.
 Cuando uses una skill, nombrala en tu respuesta (por ejemplo «Siguiendo la skill nuevo…»).
 
@@ -50,8 +50,10 @@ reportes los da la tool tal cual.
 - Verificá la disponibilidad de cada equipo antes de crear un alquiler.
 - crear_alquiler pide confirmación al socio automáticamente. No pidas permiso por texto: llamala \
 cuando tengas todos los datos y, si el socio la rechaza, preguntale qué quiere cambiar.
+- Apenas crear_alquiler devuelve «Alquiler creado: #N», generá el contrato con generar_contrato_pdf(N) sin \
+pedir permiso y avisale al socio que ya está disponible. Si el alquiler no se creó, no hay contrato.
 - Si una tool devuelve ERROR, explicalo en palabras simples y proponé cómo seguir.
-- Solo están disponibles los comandos nuevo, resumen e historial. Si piden otra cosa, decí que todavía no se puede hacer desde acá.
+- Solo están disponibles los comandos nuevo, resumen, historial y contrato. Si piden otra cosa, decí que todavía no se puede hacer desde acá.
 """
 
 DIR = Path(__file__).parent
@@ -189,6 +191,8 @@ def stream_turn(entrada: str | Command, config: RunnableConfig) -> Iterator[dict
     Emite eventos a medida que ocurren. Si el agente necesita confirmación, emite un evento
     "aprobacion" y termina: la interfaz decide y vuelve a llamar con `decision()`.
     """
+    if isinstance(entrada, str):
+        repair_dangling_call(config)   # antes de contar los mensajes vistos: puede agregar uno
     vistos = len(saved_state(config).get("messages", []))
     if isinstance(entrada, str):
         entrada = {"messages": [{"role": "user", "content": entrada}]}
@@ -207,6 +211,28 @@ def stream_turn(entrada: str | Command, config: RunnableConfig) -> Iterator[dict
 def message_count(config: RunnableConfig) -> int:
     """Cantidad de mensajes guardados de la conversación (marca de dónde empieza un turno)."""
     return len(saved_state(config).get("messages", []))
+
+
+def repair_dangling_call(config: RunnableConfig) -> bool:
+    """Si la conversación quedó cortada justo después de que el modelo pidió una tool, la completa.
+
+    Pasa cuando un turno se interrumpe entre «el modelo pidió la tool» y «la tool devolvió su resultado»
+    (por ejemplo, un segundo clic mientras se procesaba una aprobación). Una llamada sin resultado hace que
+    los proveedores rechacen TODOS los mensajes siguientes ("function call without response"), y la
+    conversación quedaría inutilizable. Se le agrega un resultado de error a cada llamada pendiente, así el
+    historial vuelve a ser válido y el agente puede avisarle al socio que verifique. Devuelve si reparó algo.
+    """
+    if pending_approval(config):      # una confirmación pendiente no es una llamada colgada
+        return False
+    mensajes = saved_state(config).get("messages", [])
+    if not mensajes or mensajes[-1].type != "ai" or not mensajes[-1].tool_calls:
+        return False
+    aviso = ("ERROR: la operación se interrumpió antes de terminar y no se sabe si llegó a completarse. "
+             "Avisale al socio que verifique el resultado en el sistema antes de repetirla.")
+    agent.update_state(config, {"messages": [
+        ToolMessage(content=aviso, tool_call_id=c["id"], name=c["name"], status="error")
+        for c in mensajes[-1].tool_calls]})
+    return True
 
 
 class TurnoEnCurso:

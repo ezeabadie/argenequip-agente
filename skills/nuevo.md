@@ -21,8 +21,10 @@ Si el socio ya dio alguno en su mensaje, no se lo vuelvas a preguntar.
 8. **Crear**: llamá `crear_alquiler`. El sistema le pedirá confirmación al socio automáticamente; no hace falta que pidas permiso por texto antes.
 
 ## Después de crear
-Informá el número de alquiler, el cliente, las fechas, el valor y el estado. Aclará que el stock quedó reservado.
-Si el sistema devuelve un ERROR, explicalo en palabras simples y proponé una salida.
+1. Si `crear_alquiler` devolvió «Alquiler creado: #N», **generá enseguida el contrato**: llamá `generar_contrato_pdf` con ese número N (sin pedir permiso: no modifica el sistema). Seguí también las reglas de la skill «contrato» (no inventes datos; si la tool avisa que faltan datos del cliente, decíselo).
+2. Informá el número de alquiler, el cliente, las fechas, el valor y el estado. Aclará que el stock quedó reservado y que el contrato en PDF ya está generado: se ve en la pantalla con el botón de descarga.
+3. Si el sistema devuelve un ERROR al crear, explicalo en palabras simples y proponé una salida. **No generes el contrato** si el alquiler no se creó.
+4. Si el socio **rechazó** la confirmación, no se creó nada: tampoco hay contrato.
 
 ## Cancelar
 Si el socio dice «cancelar» a mitad del proceso, abandoná el alta y confirmalo. No se creó nada.

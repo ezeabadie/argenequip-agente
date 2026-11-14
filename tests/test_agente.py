@@ -157,6 +157,33 @@ def test_historial_limitado_oculta_el_turno_que_se_esta_descartando(armar):
     assert [p for p, _ in ag.saved_turns(cfg, hasta=turno.mensajes_antes)] == ["hola"]
 
 
+def test_una_llamada_a_tool_sin_resultado_se_repara_y_la_conversacion_sigue(armar):
+    """Un turno cortado justo después de que el modelo pidió una tool no debe inutilizar la conversación."""
+    ag, cfg = armar(AIMessage(content="Hola!"), _llamada_resumen(), AIMessage(content="Seguimos."))
+    list(ag.stream_turn("hola", cfg))
+    for e in ag.stream_turn("pedido", cfg):
+        if e["tipo"] == "llamada":
+            break                                                     # se corta: la tool nunca se ejecutó
+    assert _sin_respuesta(ag.saved_state(cfg)["messages"]) == ["r1"]  # estado roto: los proveedores lo rechazarían
+
+    list(ag.stream_turn("seguimos", cfg))                             # el siguiente mensaje lo repara
+    mensajes = ag.saved_state(cfg)["messages"]
+    assert _sin_respuesta(mensajes) == []
+    assert [m.type for m in mensajes] == ["human", "ai", "human", "ai", "tool", "human", "ai"]
+    assert mensajes[4].content.startswith("ERROR: la operación se interrumpió")   # la tool NO se volvió a ejecutar
+    assert mensajes[-1].text == "Seguimos."
+
+
+def test_reparar_no_toca_conversaciones_sanas_ni_confirmaciones_pendientes(armar):
+    ag, cfg = armar(AIMessage(content="Hola!"), llamada_crear())
+    list(ag.stream_turn("hola", cfg))
+    assert ag.repair_dangling_call(cfg) is False                      # conversación sana
+    list(ag.stream_turn("creá el alquiler", cfg))                     # queda pausada esperando confirmación
+    assert ag.pending_approval(cfg) is not None
+    antes = ag.message_count(cfg)
+    assert ag.repair_dangling_call(cfg) is False and ag.message_count(cfg) == antes   # pendiente != colgada
+
+
 def test_descartar_sin_cambios_no_toca_nada(armar):
     ag, cfg = armar(AIMessage(content="Hola!"))
     list(ag.stream_turn("hola", cfg))

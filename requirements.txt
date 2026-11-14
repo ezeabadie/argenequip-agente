@@ -13,11 +13,14 @@ langchain-groq>=1.0
 # Memoria de corto plazo
 langgraph-checkpoint-sqlite>=3.0
 
+# PDF del contrato de alquiler (solo Python, sin programas externos)
+fpdf2>=2.8
+
 # Cliente HTTP del backend
 requests>=2.31
 
 # UI
-streamlit>=1.67   # se usa chat_input(submit_mode=...) y st.html (probado con 1.67)
+streamlit[pdf]>=1.67   # chat_input(submit_mode=...), st.html y la vista previa del contrato st.pdf (probado con 1.67)
 
 # Tests
 pytest>=8.0
