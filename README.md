@@ -6,9 +6,10 @@ Comandos disponibles hoy:
 
 | Comando | Qué hace |
 |---|---|
-| `nuevo` | Crea un alquiler paso a paso: busca el cliente (y pregunta cuál si hay homónimos), elige el domicilio, busca los equipos, verifica disponibilidad en las fechas, **pide confirmación humana** y lo registra. El stock se reserva al crear. |
+| `nuevo` | Crea un alquiler paso a paso: busca el cliente (y pregunta cuál si hay homónimos), elige el domicilio, busca los equipos, verifica disponibilidad en las fechas, **pide confirmación humana** y lo registra. El stock se reserva al crear. Al confirmarse, **genera el contrato en PDF** y lo muestra en el chat. |
 | `resumen` | Muestra todos los alquileres activos con sus equipos, valor y estado de pago. |
 | `historial` | Lista **todos los alquileres de un cliente**, en cualquier estado, con equipos, valor, pagado, saldo y totales (ej.: *«listame todos los alquileres de Juan Pérez»*). Si hay homónimos, pregunta cuál. |
+| `contrato` | Genera el **PDF del contrato** de un alquiler existente (ej.: *«generame el contrato del alquiler 12»*). Los datos salen del sistema y las cláusulas son fijas. Si no queda claro de qué alquiler, pregunta. En la pantalla se ve el contrato (vista previa) y el botón *Descargar contrato (PDF)*. También se genera solo al crear un alquiler con `nuevo`. |
 | `cancelar` | Cancela la operación en curso (en la UI: botón *Rechazar* de la confirmación). |
 
 Se pueden escribir como comando suelto (`resumen`) o en una frase libre (*«Quiero alquilarle a Pérez una hormigonera del 24 al 28 por 120000»*). Las fechas se piden y se muestran siempre en formato **DD-MM-AAAA** (por ejemplo `24-11-2026`); hacia el backend viajan en ISO.
@@ -68,7 +69,7 @@ pip install -r requirements.txt
 | `MODEL_PROVIDER` | Proveedor con el que arranca la app: `google_genai` (por defecto), `openrouter` o `groq`. Se cambia después desde la barra lateral. |
 | `MODEL_NAME` | Modelo de Gemini. Por defecto `gemini-3.5-flash`, que devuelve el razonamiento que muestra la UI. |
 | `OPENROUTER_MODEL` | Slug del modelo de OpenRouter (los gratuitos terminan en `:free`). Tiene que soportar *tool calling*. |
-| `GROQ_MODEL` | Id del modelo de Groq. Por defecto `llama-3.3-70b-versatile`. Tiene que soportar *tool calling*. |
+| `GROQ_MODEL` | Id del modelo de Groq. Por defecto `openai/gpt-oss-120b` (probado con tools y devuelve razonamiento). También andan `openai/gpt-oss-20b` y `qwen/qwen3.8-27b`. Tiene que soportar *tool calling*. |
 | `ARGENEQUIP_MODE` | `mock` (datos de prueba en memoria) o `api` (backend real). |
 | `ARGENEQUIP_BASE_URL` | Solo modo `api`. Ej.: `http://localhost:8080`. |
 | `ARGENEQUIP_USER` / `ARGENEQUIP_PASSWORD` | Solo modo `api`. Credenciales de un usuario SOCIO. |
@@ -103,9 +104,10 @@ Se abre en <http://localhost:8501>. En la pantalla vas a ver, en vivo mientras e
 - cada **tool invocada** con sus argumentos y su resultado, en orden,
 - la respuesta en markdown,
 - cuando una operación modifica el sistema, una tarjeta de **confirmación** con los botones **Aprobar** / **Rechazar**,
+- al tocar **Aprobar** o **Rechazar**, la tarjeta pasa a mostrar «se está ejecutando…» **sin botones** (la vieja seguiría en pantalla, clickeable, durante toda la espera del modelo, y un segundo clic interrumpe el turno a medias). Si una conversación igual quedó cortada justo después de que el modelo pidió una tool, se **repara sola** al enviar el siguiente mensaje (se completa la llamada con un aviso de error), porque una llamada sin resultado haría que el proveedor rechace todo lo que sigue,
 - un botón **⏹ Detener** mientras el agente trabaja: cancela la respuesta, borra ese turno del historial y te devuelve tu mensaje en la caja para **editarlo y reenviarlo**. Mientras el agente trabaja la caja de chat queda bloqueada.
 
-La interfaz usa un tema oscuro (`.streamlit/config.toml` + `estilos.css`) y muestra una pantalla de bienvenida con atajos cuando la conversación está vacía. La barra lateral se **oculta y se vuelve a abrir** con la flecha de su esquina superior (« / »). Tiene atajos para `nuevo` y `resumen`, el **selector de proveedor y modelo** (Gemini, OpenRouter o Groq; el nombre del modelo es editable) y la lista de conversaciones (cada una conserva su memoria, también si cambiás de modelo a mitad de camino). Si falta la clave del proveedor elegido, la UI avisa y sigue con el modelo anterior.
+La interfaz usa un tema oscuro (`.streamlit/config.toml` + `estilos.css`) y muestra una pantalla de bienvenida con atajos cuando la conversación está vacía. La barra lateral lleva el **logo de ArgenEquip** en la esquina superior y se **oculta y se vuelve a abrir** con la flecha de su esquina (« / »; con la barra cerrada queda el icono de la marca arriba a la izquierda). Tiene primero el **selector de proveedor** (Gemini, OpenRouter o Groq) y después la lista de conversaciones (cada una conserva su memoria, también si cambiás de proveedor a mitad de camino). El **modelo de cada proveedor no se edita desde la pantalla**: sale del `.env` (`MODEL_NAME`, `OPENROUTER_MODEL`, `GROQ_MODEL`) y la cabecera muestra cuál está en uso y si el sistema es real o de demo. Si falta la clave del proveedor elegido, la UI avisa y sigue con el anterior. Las cajas de razonamiento y de herramientas nacen plegadas y **no cambian entre abiertas y cerradas** mientras el agente trabaja ni al redibujarse. **Cada vez que se levanta Streamlit se arranca en una conversación nueva**; las anteriores quedan en la lista (si recargás la página con el servidor ya andando, seguís en la última que usaste).
 
 ### Consola
 
@@ -132,6 +134,7 @@ Los tests **no usan la API de Gemini** (el modelo se reemplaza por uno falso) ni
 3. Tocá **Aprobar** → se crea el alquiler y el stock queda reservado.
 4. `resumen` → lista los alquileres activos, incluido el nuevo, con equipos, valor y estado de pago.
 5. `listame todos los alquileres de Juan Pérez` → carga la skill `historial`, busca al cliente y muestra todos sus alquileres con los totales.
+6. `generame el contrato del alquiler 2` → carga la skill `contrato`, genera el PDF y aparece el botón **Descargar contrato (PDF)**.
 
 > El plan gratuito de Gemini tiene límites bajos y la latencia puede ser de varios segundos por respuesta. Una demo completa usa unas 8 llamadas al modelo.
 
@@ -140,9 +143,12 @@ Los tests **no usan la API de Gemini** (el modelo se reemplaza por uno falso) ni
 ```
 ├── app.py                 # UI Streamlit: eventos en vivo + botones de aprobación
 ├── estilos.css            # estilos de la UI (burbujas, tarjetas, botones, caja de chat)
+├── images/                # logo de ArgenEquip: el original (logoArgenEquip.jpg) y dos recortes para la UI (logo.png, icono.png)
 ├── .streamlit/config.toml # tema oscuro (colores)
 ├── agente.py              # create_agent, system prompt, HITL, checkpointer, streaming
 ├── tools.py               # tools del agente (todas capturan sus errores)
+├── contrato.py            # arma el PDF del contrato (fpdf2); las cláusulas son fijas
+├── contratos/             # PDF generados (se crea sola; no se versiona: tiene datos de clientes)
 ├── model.py               # fábrica del modelo (Gemini, OpenRouter o Groq; varias claves por proveedor)
 ├── argenequip_client.py   # interfaz + cliente HTTP + cliente mock
 ├── skills/                # conocimiento bajo demanda (markdown)
@@ -161,6 +167,7 @@ Los tests **no usan la API de Gemini** (el modelo se reemplaza por uno falso) ni
   - `crear_alquiler`: escribe en el sistema (**única tool con confirmación humana**).
   - `resumen_alquileres`: consulta los alquileres vigentes; el estado de pago (`SIN PAGOS` / `PAGO PARCIAL` / `PAGADO`) y los totales se calculan en código, no con el modelo.
   - `alquileres_de_cliente`: todos los alquileres de un cliente (por su id, sin ambigüedad entre homónimos), del más reciente al más antiguo, con totales calculados en código (los cancelados no se suman).
+  - `generar_contrato_pdf`: crea el PDF del contrato de un alquiler (cliente, equipos, fechas, precio y pagos, siete cláusulas y firmas) y lo guarda en `contratos/`. **Los datos salen de la API y las cláusulas son fijas** (las redacta el código, no el modelo), así que un contrato nunca lleva texto legal ni datos inventados. Se usa `fpdf2` (solo Python) en lugar de LaTeX/Tectonic: no requiere instalar programas externos y el resultado es determinista. No lleva confirmación humana porque no modifica el sistema: solo crea o reemplaza un archivo local. Un alquiler cancelado no tiene contrato; si faltan datos del cliente (DNI, teléfono, correo) figuran como «No informado» y el agente lo avisa.
   - `load_skill`: carga las instrucciones de un comando bajo demanda.
   - Todas devuelven un texto `ERROR: …` ante cualquier falla (timeout, 401, 404, validación del backend, conexión) en lugar de lanzar excepciones, así que un error no corta el flujo del agente.
 - **Conocimiento propio: skills** (`skills/*.md`): cada comando tiene su procedimiento en un archivo markdown corto que el agente carga con `load_skill` cuando lo necesita (no ocupa contexto hasta entonces). Se eligió esto en lugar de RAG porque el conocimiento es *procedimental* (qué preguntar y en qué orden), es poco y cabe entero en el contexto; no hay un corpus de texto donde buscar.
@@ -177,7 +184,8 @@ Los tests **no usan la API de Gemini** (el modelo se reemplaza por uno falso) ni
 - **Calidad según el modelo:** el flujo `nuevo` necesita un modelo con *tool calling* confiable. Los modelos gratuitos de OpenRouter pueden equivocar argumentos o ser lentos y tener cupos bajos; Gemini es el modelo con el que se probó la demo. El modelo elegido es global del proceso de Streamlit (pensado para un solo usuario local).
 - **Razonamiento en inglés:** los resúmenes de razonamiento de Gemini suelen venir en inglés aunque la respuesta sea en español. Con otros proveedores el razonamiento puede no estar disponible (la UI igualmente muestra cada tool y su resultado).
 - **Límites del plan gratuito:** si se agota el uso del modelo, la UI muestra un aviso **que queda a la vista** (no desaparece al redibujar) y dice qué proveedor y modelo fallaron, si el límite es diario o por minuto y, cuando el proveedor lo informa, en cuánto se libera. El mensaje que enviaste vuelve a la caja para reenviarlo, y podés cambiar de proveedor en la barra lateral. Hay avisos propios para modelo saturado (503), falta de crédito (402) y clave inválida (401/403). Se reintenta automáticamente hasta 4 veces antes de avisar. En Gemini gratuito el tope diario es bajo (unas 20 llamadas por día y modelo; una conversación de demo usa unas 8).
-- **Alcance:** solo están implementados `nuevo`, `resumen`, `historial` y `cancelar`. Los demás comandos del sistema (cobrar, objetos, flete, fechas, postergar, stock, etc.) todavía no están disponibles.
+- **Contratos:** el PDF es un **modelo base**, no asesoramiento legal: las cláusulas son genéricas y deben ser revisadas por las partes (y, si corresponde, por un asesor legal) antes de firmar; así lo aclara el propio documento. Los PDF contienen datos de clientes, por eso `contratos/` está en `.gitignore`.
+- **Alcance:** solo están implementados `nuevo`, `resumen`, `historial`, `contrato` y `cancelar`. Los demás comandos del sistema (cobrar, objetos, flete, fechas, postergar, stock, etc.) todavía no están disponibles.
 - **Datos de la tarjeta de confirmación:** muestra el cliente y el domicilio por su id (el título del alquiler sí incluye el nombre).
 - **Modo `api`:** `consultar_disponibilidad`, `crear_alquiler` y el listado de alquileres siguen los contratos del backend leídos del código fuente; conviene validarlos contra el backend corriendo antes de la demo.
 - El estado del modo `mock` no persiste entre ejecuciones.

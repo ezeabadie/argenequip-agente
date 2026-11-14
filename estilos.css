@@ -27,8 +27,15 @@ header[data-testid="stHeader"] { background: transparent; }
   background: #08080a;
   border-right: 1px solid var(--borde);
 }
-[data-testid="stSidebar"] .block-container,
-[data-testid="stSidebarUserContent"] { padding-top: 1rem; }
+[data-testid="stSidebar"] .block-container { padding-top: 1rem; }
+
+/* Logo en la esquina superior: la cabecera de la barra lateral deja de ocupar una fila propia (solo queda la
+   flecha para ocultarla, flotando arriba a la derecha) y se oculta el icono chico que st.logo pone ahí. */
+[data-testid="stSidebarHeader"] {
+  position: absolute; top: 0; right: 0; width: auto; height: auto; padding: .5rem .6rem; z-index: 10;
+}
+[data-testid="stSidebarHeader"] > div:not([data-testid="stSidebarCollapseButton"]) { display: none; }
+[data-testid="stSidebarUserContent"] { padding-top: .9rem !important; }
 [data-testid="stSidebarCollapseButton"],
 [data-testid="stSidebarCollapseButton"] button,
 [data-testid="stExpandSidebarButton"],
@@ -45,14 +52,15 @@ header[data-testid="stHeader"] { background: transparent; }
 
 .marca-lateral { font-size: 1.25rem; font-weight: 700; letter-spacing: .2px; margin-bottom: .1rem; }
 .marca-lateral span { color: var(--acento); }
-.sub-lateral { color: var(--apagado); font-size: .8rem; margin-bottom: 1rem; }
+.sub-lateral { color: var(--apagado); font-size: .8rem; margin: .3rem 0 .4rem; }
+[data-testid="stSidebar"] [data-testid="stImage"] img { border-radius: 14px; }
 .seccion {
   color: var(--apagado); font-size: .7rem; font-weight: 600; letter-spacing: .12em;
   text-transform: uppercase; margin: 1.1rem 0 .45rem;
 }
 
 /* --- Cabecera ----------------------------------------------------------- */
-.cabecera { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+.cabecera { display: flex; align-items: center; justify-content: flex-end; gap: 1rem;
   flex-wrap: wrap; padding-bottom: .9rem; margin-bottom: 1.2rem; border-bottom: 1px solid var(--borde); }
 .cabecera .marca { font-size: 1.35rem; font-weight: 700; }
 .cabecera .marca small { color: var(--apagado); font-weight: 400; font-size: .85rem; margin-left: .5rem; }

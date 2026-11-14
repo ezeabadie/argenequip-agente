@@ -46,7 +46,7 @@ def modelo_por_defecto(provider: str) -> str:
     if provider == "openrouter":
         return os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
     if provider == "groq":
-        return os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        return os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
     return os.getenv("MODEL_NAME", "gemini-3.5-flash")
 
 

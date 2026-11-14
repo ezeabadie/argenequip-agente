@@ -13,24 +13,31 @@ import streamlit as st
 try:
     from agente import (
         TurnoEnCurso, claves_en_uso, decision, discard_turn, explicar_error, list_threads, modelo_actual, new_thread,
-        pending_approval, resume_thread, saved_turns, select_thread, stream_turn, usar_modelo,
+        pending_approval, repair_dangling_call, resume_thread, saved_turns, select_thread, stream_turn, usar_modelo,
     )
     from argenequip_client import get_client
     from model import PROVEEDORES, modelo_por_defecto
-    from tools import fecha_ddmmaaaa
+    from tools import BASE_DIR, CONTRATOS_DIR, fecha_ddmmaaaa
 except RuntimeError as e:  # por ejemplo, falta GOOGLE_API_KEY en el .env
     st.error(str(e))
     st.stop()
 
-PASOS_EXPANDIDOS = True   # False: razonamiento y tools quedan plegados
 ICONOS = {"load_skill": "📖", "buscar_cliente": "🧑‍💼", "buscar_equipos": "🔎",
-          "consultar_disponibilidad": "📅", "resumen_alquileres": "📋", "crear_alquiler": "📝"}
+          "consultar_disponibilidad": "📅", "resumen_alquileres": "📋", "crear_alquiler": "📝",
+          "alquileres_de_cliente": "🗂️", "generar_contrato_pdf": "📄"}
 
-AVATARES = {"user": "👤", "assistant": "🛠️"}
+# Logo de ArgenEquip (images/logoArgenEquip.jpg es el original; logo.png e icono.png son recortes para la UI).
+# Si faltan los archivos, la interfaz sigue andando con un emoji.
+LOGO = BASE_DIR / "images" / "logo.png"       # marca + nombre
+ICONO = BASE_DIR / "images" / "icono.png"     # solo la marca (pestaña, avatar del asistente, barra lateral cerrada)
+AVATARES = {"user": "👤", "assistant": str(ICONO) if ICONO.exists() else "🛠️"}
 
-st.set_page_config(page_title="ArgenEquip - Asistente", page_icon="🛠️", initial_sidebar_state="expanded")
+st.set_page_config(page_title="ArgenEquip - Asistente", page_icon=str(ICONO) if ICONO.exists() else "🛠️",
+                   initial_sidebar_state="expanded")
 # El tema (colores) está en .streamlit/config.toml; los detalles de estilo, en estilos.css.
 st.html(f"<style>{(Path(__file__).parent / 'estilos.css').read_text(encoding='utf-8')}</style>")
+if ICONO.exists():
+    st.logo(str(ICONO), size="large")   # esquina superior izquierda cuando la barra lateral está cerrada
 
 
 def mensaje(rol: str):
@@ -48,9 +55,61 @@ def titulo_llamada(e: dict) -> str:
     return f"{icono} {nombre}"
 
 
-def render_eventos(eventos) -> None:
-    """Dibuja los eventos a medida que llegan; sirve en vivo (generador) y para el historial (lista)."""
-    llamadas = {}   # id del tool call -> contenedor st.status (queda "running" hasta el resultado)
+def render_descarga(e: dict, abierto: bool = True) -> None:
+    """Vista previa y botón para bajar el PDF que generó la tool (la primera línea del resultado dice dónde quedó).
+
+    `abierto`: la vista previa se muestra desplegada solo para el contrato más reciente; los anteriores quedan
+    plegados (cada redibujado vuelve a cargar el visor de PDF, y tener varios abiertos es pesado).
+    """
+    nombre = e["texto"].splitlines()[0].removeprefix("PDF generado:").strip()
+    ruta = (BASE_DIR / nombre).resolve()
+    # Solo se ofrecen archivos de la carpeta de contratos (el texto viene de una tool, pero se valida igual).
+    if ruta.parent == CONTRATOS_DIR.resolve() and ruta.suffix == ".pdf" and ruta.exists():
+        contenido = ruta.read_bytes()
+        with st.expander("📄 Ver contrato", expanded=abierto):
+            try:   # vista previa dentro del chat (necesita `streamlit[pdf]`); si falta, queda el botón de descarga
+                st.pdf(contenido, height=560, key=f"vista-{e['id']}")
+            except Exception:
+                st.caption("No se pudo mostrar la vista previa: usá el botón de descarga.")
+        st.download_button("⬇️ Descargar contrato (PDF)", contenido, file_name=ruta.name,
+                           mime="application/pdf", key=f"pdf-{e['id']}")
+
+
+def _fallo(resultado: dict) -> bool:
+    return resultado["estado"] == "error" or resultado["texto"].startswith("ERROR")
+
+
+def _caja_de_tool(llamada: dict, resultado: dict | None, en_vivo: bool):
+    """Caja plegable de una tool con sus argumentos y su resultado.
+
+    Para que no parpadee, la caja NUNCA cambia entre abierta y cerrada mientras se dibuja: nace plegada (o
+    abierta, si falló) y así queda. Si ya se conoce el resultado (historial) nace directamente en su estado final;
+    en vivo, nace «running» y cuando llega el resultado solo cambia el ícono.
+    """
+    fallo = bool(resultado) and _fallo(resultado)
+    titulo = titulo_llamada(llamada)
+    if resultado is None and not en_vivo:
+        titulo += " · esperando tu confirmación"       # historial: la tool pidió confirmación y todavía no se ejecutó
+    estado = "running" if resultado is None else ("error" if fallo else "complete")
+    caja = st.status(titulo, expanded=fallo, state=estado)
+    with caja:
+        st.caption("Argumentos")
+        st.json(llamada["args"], expanded=False)
+        if resultado is not None:
+            st.caption("Resultado")
+            st.code(resultado["texto"][:1500], language=None)
+    return caja
+
+
+def render_eventos(eventos, abrir_pdf: bool = True) -> None:
+    """Dibuja los eventos a medida que llegan; sirve en vivo (generador) y para el historial (lista).
+
+    `abrir_pdf`: si la vista previa del contrato se muestra desplegada (ver render_descarga).
+    """
+    en_vivo = not isinstance(eventos, list)
+    # En el historial se conocen todos los resultados de antemano, así cada caja nace ya terminada.
+    resultados = {} if en_vivo else {e["id"]: e for e in eventos if e["tipo"] == "resultado"}
+    cajas = {}   # en vivo: id de la llamada -> su caja, a la espera del resultado
     for e in eventos:
         tipo = e["tipo"]
         if tipo == "razonamiento":
@@ -60,20 +119,20 @@ def render_eventos(eventos) -> None:
         elif tipo == "texto":
             st.markdown(e["texto"])   # st.markdown renderiza el markdown del modelo
         elif tipo == "llamada":
-            status = st.status(titulo_llamada(e), expanded=PASOS_EXPANDIDOS)
-            with status:
-                st.caption("Argumentos")
-                st.json(e["args"], expanded=False)
-            llamadas[e["id"]] = status
+            if en_vivo:
+                cajas[e["id"]] = _caja_de_tool(e, None, en_vivo=True)
+            else:
+                _caja_de_tool(e, resultados.get(e["id"]), en_vivo=False)
         elif tipo == "resultado":
-            status = llamadas.get(e["id"])
-            if status is None:   # el resultado llegó sin su llamada (no debería pasar)
-                continue
-            fallo = e["estado"] == "error" or e["texto"].startswith("ERROR")
-            with status:
-                st.caption("Resultado")
-                st.code(e["texto"][:1500], language=None)
-            status.update(state="error" if fallo else "complete", expanded=PASOS_EXPANDIDOS and fallo)
+            if en_vivo:
+                caja = cajas.get(e["id"])
+                if caja is not None:   # solo se agrega el resultado y se cambia el ícono: la caja no se abre ni se cierra
+                    with caja:
+                        st.caption("Resultado")
+                        st.code(e["texto"][:1500], language=None)
+                    caja.update(state="error" if _fallo(e) else "complete", expanded=_fallo(e))
+            if e["texto"].startswith("PDF generado:"):
+                render_descarga(e, abierto=abrir_pdf)
         # "aprobacion" no se dibuja acá: lo hace render_aprobacion() desde el estado guardado.
 
 
@@ -113,6 +172,8 @@ def correr(entrada) -> None:
         with st.spinner("Terminando de cancelar la respuesta anterior…"):
             anterior.hecho.wait(timeout=120)
     st.session_state.pop("error", None)   # enviar algo nuevo borra el aviso de la falla anterior
+    if es_mensaje:
+        repair_dangling_call(config)   # si un turno anterior quedó cortado, se arregla ANTES de marcar dónde empieza este
     turno = TurnoEnCurso(config) if es_mensaje else None
     if turno:
         st.session_state.en_curso = (entrada, turno)
@@ -121,13 +182,17 @@ def correr(entrada) -> None:
             if es_mensaje:
                 st.button("⏹ Detener", key="detener", help="Cancela esta respuesta y te deja editar tu mensaje")
             try:
-                with st.spinner("El agente está trabajando..."):
+                with st.spinner("El agente está trabajando..." if es_mensaje
+                                else "Ejecutando lo que decidiste y esperando la respuesta del modelo..."):
                     render_eventos(stream_turn(entrada, config))
             except Exception as e:
                 # El modelo falló (cuota agotada, saturación...). Se guarda el aviso para mostrarlo después del
                 # st.rerun() y, si era un mensaje nuevo, se descarta el turno sin respuesta y el texto vuelve a
                 # la caja para reenviarlo cuando se pueda.
                 tipo, titulo, detalle = explicar_error(e)
+                if not es_mensaje:   # reanudación tras Aprobar/Rechazar: primero corre la tool y recién después responde el modelo
+                    detalle += (" La operación que aprobaste ya se ejecutó (mirá su resultado en la conversación); "
+                                "lo que falló fue la respuesta del modelo.")
                 if turno:
                     discard_turn(config, turno.mensajes_antes)
                     st.session_state.restaurar = entrada
@@ -144,8 +209,12 @@ def correr(entrada) -> None:
 
 # --- Confirmación humana ------------------------------------------------------------
 
-def render_aprobacion(acciones: list[dict]) -> None:
-    """Resumen de la escritura pendiente con botones Aprobar / Rechazar."""
+def render_aprobacion(acciones: list[dict], procesando: str | None = None) -> None:
+    """Resumen de la escritura pendiente con botones Aprobar / Rechazar.
+
+    Con `procesando` (un texto) los botones se reemplazan por ese aviso: durante la ejecución de lo aprobado la
+    tarjeta vieja seguiría en pantalla, atenuada pero clickeable, y un segundo clic interrumpe la corrida a medias.
+    """
     with mensaje("assistant"):
         for a in acciones:
             args = a["args"]
@@ -169,6 +238,9 @@ def render_aprobacion(acciones: list[dict]) -> None:
                 )
             else:
                 st.json({"operación": a["name"], **args})
+        if procesando:
+            st.info(procesando, icon="⏳")
+            return
         c1, c2 = st.columns(2)
         if c1.button("✅ Aprobar", type="primary", use_container_width=True):
             st.session_state.entrada = decision(True)
@@ -181,22 +253,20 @@ def render_aprobacion(acciones: list[dict]) -> None:
 # --- Sesión y barra lateral ------------------------------------------------------------
 
 def render_modelo() -> None:
-    """Selector de proveedor y modelo: reconstruye el agente (la memoria de las conversaciones se conserva)."""
+    """Selector de proveedor: reconstruye el agente (la memoria de las conversaciones se conserva).
+
+    El modelo de cada proveedor no se elige acá: sale del .env (MODEL_NAME / OPENROUTER_MODEL / GROQ_MODEL), y
+    la cabecera muestra cuál está en uso.
+    """
     seccion("Modelo")
     ids = list(PROVEEDORES)
     en_uso = modelo_actual()
     proveedor = st.selectbox("Proveedor", ids, format_func=PROVEEDORES.get, key="proveedor",
                              index=ids.index(en_uso[0]) if en_uso[0] in ids else 0)
-    # Un campo de texto por proveedor, así cada uno recuerda su propio modelo.
-    nombre = st.text_input("Modelo", key=f"modelo_{proveedor}",
-                           value=en_uso[1] if proveedor == en_uso[0] else modelo_por_defecto(proveedor),
-                           help="Identificador del modelo. En OpenRouter, el slug (los gratuitos terminan en :free); "
-                                "tiene que soportar tool calling.").strip() or modelo_por_defecto(proveedor)
     try:
-        usar_modelo(proveedor, nombre)
-    except Exception as e:   # falta la clave, paquete sin instalar, nombre inválido...
-        st.error(f"No se pudo usar ese modelo: {e}")
-    st.caption(f"En uso: `{modelo_actual()[1]}`")
+        usar_modelo(proveedor, modelo_por_defecto(proveedor))
+    except Exception as e:   # falta la clave, paquete sin instalar...
+        st.error(f"No se pudo usar ese proveedor: {e}")
     n_clave, n_claves = claves_en_uso()
     if n_claves > 1:   # solo el número: las claves nunca se muestran
         st.caption(f"🔑 Clave {n_clave} de {n_claves} (cambia sola cuando una se queda sin cupo)")
@@ -210,18 +280,12 @@ def seccion(titulo: str) -> None:
 def render_sidebar() -> None:
     actual = st.session_state.config["configurable"]["thread_id"]
     with st.sidebar:
-        st.html('<div class="marca-lateral">🛠️ Argen<span>Equip</span></div>'
-                '<div class="sub-lateral">Asistente de alquileres</div>')
-        seccion("Comandos")
-        if st.button("📝 nuevo", use_container_width=True, help="Crea un alquiler paso a paso"):
-            st.session_state.entrada = "nuevo"
-            st.rerun()
-        if st.button("📋 resumen", use_container_width=True, help="Alquileres activos con equipos, valor y estado de pago"):
-            st.session_state.entrada = "resumen"
-            st.rerun()
-        st.caption("**cancelar**: usá «Rechazar» en la confirmación, o escribilo en el chat.")
-        st.caption(f"Modo del sistema: `{type(get_client()).__name__}`")
-
+        # Logo arriba de todo, en la esquina (el nombre «argenequip» ya es parte del logo).
+        if LOGO.exists():
+            st.image(str(LOGO), width=150)
+        else:
+            st.html('<div class="marca-lateral">Argen<span>Equip</span></div>')
+        st.html('<div class="sub-lateral">Asistente de alquileres</div>')
         render_modelo()
 
         seccion("Conversaciones")
@@ -235,13 +299,12 @@ def render_sidebar() -> None:
 
 
 def render_cabecera() -> None:
-    """Marca arriba del chat (queda a la vista aunque se oculte la barra lateral) y qué modelo/sistema se usa."""
+    """Qué sistema (real o de demo) y qué modelo se están usando. El logo está en la barra lateral."""
     proveedor, nombre = modelo_actual()
     es_api = type(get_client()).__name__ == "HttpClient"
     modo = ('<span class="chip ok">● Sistema real (API)</span>' if es_api
             else '<span class="chip demo">● Datos de demo</span>')
     st.html('<div class="cabecera">'
-            '<div class="marca">🛠️ ArgenEquip<small>Asistente de alquileres</small></div>'
             f'<div class="chips">{modo}<span class="chip">{escape(PROVEEDORES.get(proveedor, proveedor))} · {escape(nombre)}</span></div>'
             '</div>')
 
@@ -262,11 +325,26 @@ def render_bienvenida() -> None:
         st.rerun()
     st.html('<div class="ejemplo">También podés escribir, por ejemplo: '
             '<q>Quiero alquilarle a Pérez una hormigonera del 24 al 28 por 120000</q> o '
-            '<q>Listame todos los alquileres de Juan Pérez</q></div>')
+            '<q>Listame todos los alquileres de Juan Pérez</q> o '
+            '<q>Generame el contrato del alquiler 12</q></div>')
+
+
+@st.cache_resource
+def _arranque() -> dict:
+    """Estado que vive mientras dure el servidor de Streamlit (no se pierde al recargar la página)."""
+    return {"conversacion_nueva": False}
 
 
 if "config" not in st.session_state:
-    st.session_state.config = resume_thread()
+    arranque = _arranque()
+    if not arranque["conversacion_nueva"]:
+        # Primera sesión desde que se levantó el servidor: se empieza en una conversación nueva (las anteriores
+        # siguen en la lista de la barra lateral).
+        arranque["conversacion_nueva"] = True
+        st.session_state.config = new_thread()
+    else:
+        # Recarga de la página o pestaña nueva con el servidor ya andando: se sigue con la última conversación.
+        st.session_state.config = resume_thread()
 config = st.session_state.config
 
 # ¿Quedó un turno a medias? Pasa si el socio tocó «Detener» (o cualquier otro control) mientras el agente
@@ -310,22 +388,32 @@ if isinstance(prompt, str):
 
 render_sidebar()
 render_cabecera()
-if entrada is None:
-    render_error()   # si está por correr un turno, el aviso viejo ya no corresponde
 
 # Streamlit re-ejecuta todo el script en cada interacción: se redibuja la conversación guardada.
 turnos = saved_turns(config, hasta=cancelado.mensajes_antes if en_descarte else None)
 if not turnos and entrada is None and not acciones:
     render_bienvenida()
-for pregunta, eventos in turnos:
+for i, (pregunta, eventos) in enumerate(turnos):
     mensaje("user").markdown(pregunta)
     with mensaje("assistant"):
-        render_eventos(eventos)
+        render_eventos(eventos, abrir_pdf=(i == len(turnos) - 1))   # solo el contrato más reciente, desplegado
+
+# El aviso de una falla del modelo va justo arriba de la caja de chat, no arriba de todo: con una conversación
+# larga (y la vista abajo, donde está la confirmación) un aviso en la cabecera pasaría inadvertido.
+if entrada is None:   # si está por correr un turno, el aviso viejo ya no corresponde
+    render_error()
 
 if isinstance(entrada, str):
     mensaje("user").markdown(entrada)
 
 if entrada is not None:
+    if not isinstance(entrada, str) and acciones:
+        # Aprobar / Rechazar: se redibuja la tarjeta SIN botones en el mismo lugar, así la vieja (que Streamlit
+        # deja en pantalla hasta que termine la corrida) no se puede volver a tocar.
+        aprobo = entrada.resume["decisions"][0]["type"] == "approve"
+        render_aprobacion(acciones, procesando=("Aprobado: se está ejecutando la operación; puede tardar unos segundos "
+                                                "(el modelo todavía tiene que responder). No toques nada hasta que termine."
+                                                if aprobo else "Rechazado: se está avisando al agente…"))
     correr(entrada)
 elif acciones:
     render_aprobacion(acciones)
