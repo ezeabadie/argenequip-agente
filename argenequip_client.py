@@ -36,6 +36,10 @@ class ArgenEquipClient(ABC):
         """Clientes por nombre o DNI: [{id, nombre, dni, telefono, mail, domicilios:[{id, calle, numero}]}]."""
 
     @abstractmethod
+    def ver_cliente(self, cliente_id: int) -> dict:
+        """Un cliente por su id (mismo formato que buscar_clientes). Falla con ArgenEquipError si no existe."""
+
+    @abstractmethod
     def buscar_herramientas(self, texto: str) -> list[dict]:
         """Equipos activos: [{idHerramienta, nombre, stockTotal, stockPerdido, activo}]."""
 
@@ -197,6 +201,9 @@ class HttpClient(ArgenEquipClient):
 
     def buscar_clientes(self, texto):
         return self._paginado("/api/clients", {"search": texto})
+
+    def ver_cliente(self, cliente_id):
+        return self._request("GET", f"/api/clients/{cliente_id}")
 
     def buscar_herramientas(self, texto):
         data = self._request("GET", "/api/herramientas", params={"search": texto, "verInactivas": "false"})
@@ -396,6 +403,12 @@ class MockClient(ArgenEquipClient):
     def buscar_clientes(self, texto):
         t = self._sin_tildes(texto)
         return [c for c in self.clientes if t in self._sin_tildes(c["nombre"]) or t in c["dni"]]
+
+    def ver_cliente(self, cliente_id):
+        for c in self.clientes:
+            if c["id"] == cliente_id:
+                return c
+        raise ArgenEquipError(f"No encontrado: Cliente con id {cliente_id}")
 
     def buscar_herramientas(self, texto):
         t = self._sin_tildes(texto)

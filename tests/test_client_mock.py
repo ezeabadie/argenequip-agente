@@ -18,6 +18,13 @@ def test_homonimos(cliente):
     assert [c["nombre"] for c in cliente.buscar_clientes("27333444")] == ["Carlos Pérez"]
 
 
+def test_ver_cliente_por_id(cliente):
+    c = cliente.ver_cliente(2)
+    assert c["nombre"] == "Carlos Pérez" and [d["calle"] for d in c["domicilios"]] == ["Belgrano"]
+    with pytest.raises(ArgenEquipError, match="No encontrado"):
+        cliente.ver_cliente(999)
+
+
 def test_equipos_solo_activos(cliente):
     assert cliente.buscar_herramientas("generador") == []   # inactivo
 

@@ -67,6 +67,23 @@ def fecha_ddmmaaaa(valor) -> str:
         return str(valor)
 
 
+def cliente_y_domicilio(cliente_id, domicilio_id) -> tuple[str, str]:
+    """Nombre del cliente y dirección de entrega para la tarjeta de confirmación (en vez de ids sueltos).
+
+    Si el domicilio no es uno de los del cliente lo dice, así el socio lo ve ANTES de aprobar. Si no se puede
+    consultar el cliente, se muestran los ids (la tarjeta nunca falla por esto).
+    """
+    try:
+        cliente = get_client().ver_cliente(cliente_id)
+    except Exception:
+        return f"cliente #{cliente_id}", f"domicilio #{domicilio_id}"
+    dom = next((d for d in cliente.get("domicilios", []) if d["id"] == domicilio_id), None)
+    dni = f" · DNI {cliente['dni']}" if cliente.get("dni") else ""
+    direccion = (f"{dom['calle']} {dom['numero']}" if dom
+                 else f"domicilio #{domicilio_id} ⚠️ (no es uno de los domicilios del cliente)")
+    return f"{cliente['nombre']}{dni}", direccion
+
+
 def _estado_de_pago(a: dict) -> str:
     """Estado de pago derivado de los montos (en código, no lo deduce el modelo)."""
     if float(a["saldoPendiente"]) <= 0:

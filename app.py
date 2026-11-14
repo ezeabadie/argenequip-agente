@@ -5,6 +5,7 @@ llamada a tool, resultado, texto) y la confirmación humana (Aprobar / Rechazar)
 
 Ejecutar con:  streamlit run app.py
 """
+from datetime import date, timedelta
 from html import escape
 from pathlib import Path
 
@@ -12,12 +13,13 @@ import streamlit as st
 
 try:
     from agente import (
-        TurnoEnCurso, claves_en_uso, decision, discard_turn, explicar_error, list_threads, modelo_actual, new_thread,
-        pending_approval, repair_dangling_call, resume_thread, saved_turns, select_thread, stream_turn, usar_modelo,
+        TurnoEnCurso, claves_en_uso, decision, delete_thread, describir_paso, discard_turn, explicar_error,
+        list_threads, modelo_actual, new_thread, pending_approval, repair_dangling_call, resume_thread, saved_turns,
+        select_thread, stream_turn, usar_modelo,
     )
     from argenequip_client import get_client
     from model import PROVEEDORES, modelo_por_defecto
-    from tools import BASE_DIR, CONTRATOS_DIR, fecha_ddmmaaaa
+    from tools import BASE_DIR, CONTRATOS_DIR, cliente_y_domicilio, fecha_ddmmaaaa
 except RuntimeError as e:  # por ejemplo, falta GOOGLE_API_KEY en el .env
     st.error(str(e))
     st.stop()
@@ -155,6 +157,35 @@ def render_error() -> None:
     nivel(texto, icon=ICONOS_ERROR[e["tipo"]])
 
 
+def con_progreso(eventos, inicial: str):
+    """Pasa los eventos del agente tal cual y, mientras espera el siguiente, muestra qué está haciendo.
+
+    El spinner solo está activo durante la espera (dentro de `next`); entre un evento y el siguiente no hay
+    ninguno. Las tools se ejecutan en milisegundos: lo que dura de verdad es la espera al modelo, y ahí el texto
+    dice qué paso acaba de terminar («Paso 2 hecho: Buscando el equipo «taladro» · pensando el siguiente…»), para
+    que con un modelo lento no se confunda con un cuelgue.
+    """
+    pasos = 0
+    ultimo = ""
+    texto = inicial
+    iterador = iter(eventos)
+    while True:
+        with st.spinner(texto):
+            try:
+                e = next(iterador)
+            except StopIteration:
+                return
+        yield e
+        if e["tipo"] == "llamada":          # el modelo pidió una tool: ahora se ejecuta
+            pasos += 1
+            ultimo = describir_paso(e["nombre"], e["args"])
+            texto = f"Paso {pasos} · {ultimo}…"
+        elif e["tipo"] == "resultado" and pasos:   # la tool terminó: el modelo piensa qué sigue
+            texto = f"Paso {pasos} hecho: {ultimo} · pensando el siguiente…"
+        elif e["tipo"] == "resultado":             # (reanudación tras una confirmación: la llamada fue antes)
+            texto = "Operación ejecutada · esperando la respuesta del modelo…"
+
+
 def correr(entrada) -> None:
     """Ejecuta un turno (o la reanudación tras la confirmación) mostrándolo en vivo.
 
@@ -182,9 +213,8 @@ def correr(entrada) -> None:
             if es_mensaje:
                 st.button("⏹ Detener", key="detener", help="Cancela esta respuesta y te deja editar tu mensaje")
             try:
-                with st.spinner("El agente está trabajando..." if es_mensaje
-                                else "Ejecutando lo que decidiste y esperando la respuesta del modelo..."):
-                    render_eventos(stream_turn(entrada, config))
+                render_eventos(con_progreso(stream_turn(entrada, config),
+                                            "Pensando…" if es_mensaje else "Ejecutando lo que decidiste…"))
             except Exception as e:
                 # El modelo falló (cuota agotada, saturación...). Se guarda el aviso para mostrarlo después del
                 # st.rerun() y, si era un mensaje nuevo, se descarta el turno sin respuesta y el texto vuelve a
@@ -225,13 +255,15 @@ def render_aprobacion(acciones: list[dict], procesando: str | None = None) -> No
                     nombres = {h["idHerramienta"]: h["nombre"] for h in get_client().buscar_herramientas("")}
                 except Exception:
                     pass
-                equipos = "\n".join(f"- {e['cantidad']} x {nombres.get(e['herramienta_id'], 'equipo')} (id {e['herramienta_id']})"
+                equipos = "\n".join(f"- {e['cantidad']} × {nombres.get(e['herramienta_id'], 'equipo #' + str(e['herramienta_id']))}"
                                     for e in args.get("equipos", []))
+                cliente, domicilio = cliente_y_domicilio(args.get("cliente_id"), args.get("domicilio_id"))
                 monto = f"${args['monto_total']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                 st.markdown(
                     f"### Nuevo alquiler\n"
                     f"- **Título:** {args.get('titulo')}\n"
-                    f"- **Cliente (id):** {args.get('cliente_id')} · **Domicilio (id):** {args.get('domicilio_id')}\n"
+                    f"- **Cliente:** {cliente}\n"
+                    f"- **Domicilio de entrega:** {domicilio}\n"
                     f"- **Fechas:** {fecha_ddmmaaaa(args.get('fecha_inicio'))} al {fecha_ddmmaaaa(args.get('fecha_fin'))}\n"
                     f"- **Valor total:** {monto}\n"
                     f"- **Equipos:**\n{equipos}"
@@ -255,8 +287,8 @@ def render_aprobacion(acciones: list[dict], procesando: str | None = None) -> No
 def render_modelo() -> None:
     """Selector de proveedor: reconstruye el agente (la memoria de las conversaciones se conserva).
 
-    El modelo de cada proveedor no se elige acá: sale del .env (MODEL_NAME / OPENROUTER_MODEL / GROQ_MODEL), y
-    la cabecera muestra cuál está en uso.
+    El modelo de cada proveedor no se elige acá: sale del .env (MODEL_NAME / OPENROUTER_MODEL / GROQ_MODEL). Se
+    muestra debajo del selector como campo de solo lectura (y también en la cabecera).
     """
     seccion("Modelo")
     ids = list(PROVEEDORES)
@@ -267,6 +299,8 @@ def render_modelo() -> None:
         usar_modelo(proveedor, modelo_por_defecto(proveedor))
     except Exception as e:   # falta la clave, paquete sin instalar...
         st.error(f"No se pudo usar ese proveedor: {e}")
+    # El modelo en uso, solo para mirar (deshabilitado: no se edita desde la pantalla).
+    st.text_input("Modelo", value=modelo_actual()[1], disabled=True, key=f"modelo_{modelo_actual()[0]}")
     n_clave, n_claves = claves_en_uso()
     if n_claves > 1:   # solo el número: las claves nunca se muestran
         st.caption(f"🔑 Clave {n_clave} de {n_claves} (cambia sola cuando una se queda sin cupo)")
@@ -275,6 +309,49 @@ def render_modelo() -> None:
 def seccion(titulo: str) -> None:
     """Rótulo pequeño en mayúsculas para separar bloques de la barra lateral."""
     st.html(f'<div class="seccion">{escape(titulo)}</div>')
+
+
+def etiqueta_de_fecha(fecha: date | None) -> str:
+    """«Hoy», «Ayer» o la fecha en DD-MM-AAAA (los grupos de la lista de conversaciones)."""
+    hoy = date.today()
+    if fecha is None:
+        return "Anteriores"
+    if fecha == hoy:
+        return "Hoy"
+    if fecha == hoy - timedelta(days=1):
+        return "Ayer"
+    return fecha_ddmmaaaa(fecha)
+
+
+def render_conversaciones(actual: str) -> None:
+    """Conversaciones agrupadas por día, con un botón para borrar cada una (pide confirmación: no se puede deshacer)."""
+    por_borrar = st.session_state.get("borrando")
+    grupo = None
+    for thread_id, titulo, fecha in list_threads():
+        etiqueta = etiqueta_de_fecha(fecha)
+        if etiqueta != grupo:
+            grupo = etiqueta
+            st.html(f'<div class="grupo">{escape(etiqueta)}</div>')
+        if por_borrar == thread_id:
+            st.caption(f"¿Borrar «{titulo}»? No se puede deshacer.")
+            c1, c2 = st.columns(2)
+            if c1.button("Sí, borrar", key=f"si-{thread_id}", type="primary", use_container_width=True):
+                delete_thread(thread_id)
+                st.session_state.pop("borrando", None)
+                if thread_id == actual:   # se borró la que estaba abierta: se pasa a una conversación nueva
+                    st.session_state.config = new_thread()
+                st.rerun()
+            if c2.button("No", key=f"no-{thread_id}", use_container_width=True):
+                st.session_state.pop("borrando", None)
+                st.rerun()
+        else:
+            titulo_col, borrar_col = st.columns([5, 1], vertical_alignment="center")
+            if titulo_col.button(titulo, key=thread_id, disabled=thread_id == actual, use_container_width=True):
+                st.session_state.config = select_thread(thread_id)
+                st.rerun()
+            if borrar_col.button("🗑", key=f"del-{thread_id}", help="Borrar esta conversación"):
+                st.session_state.borrando = thread_id
+                st.rerun()
 
 
 def render_sidebar() -> None:
@@ -292,10 +369,7 @@ def render_sidebar() -> None:
         if st.button("➕ Nueva conversación", disabled=not saved_turns(st.session_state.config), use_container_width=True):
             st.session_state.config = new_thread()
             st.rerun()
-        for thread_id, titulo in list_threads():
-            if st.button(titulo, key=thread_id, disabled=thread_id == actual, use_container_width=True):
-                st.session_state.config = select_thread(thread_id)
-                st.rerun()
+        render_conversaciones(actual)
 
 
 def render_cabecera() -> None:

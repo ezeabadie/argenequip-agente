@@ -13,7 +13,7 @@ import re
 import sqlite3
 import threading
 from collections.abc import Iterator
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -143,19 +143,58 @@ def saved_state(config: RunnableConfig) -> dict:
     return agent.get_state(config).values
 
 
-def list_threads(limit: int = 5) -> list[tuple[str, str]]:
-    """Últimas conversaciones con mensajes, la más reciente primero: (thread_id, título)."""
+def _fecha_local(marca: str | None) -> date | None:
+    """'2026-11-13T20:47:35+00:00' (hora UTC de un checkpoint) -> fecha en la hora local."""
+    try:
+        return datetime.fromisoformat(marca).astimezone().date()
+    except (TypeError, ValueError):
+        return None
+
+
+def list_threads(limit: int = 30) -> list[tuple[str, str, date | None]]:
+    """Conversaciones con mensajes, la de actividad más reciente primero: (thread_id, título, fecha de su última actividad).
+
+    El título son las primeras palabras del primer mensaje; la fecha sale del último guardado de esa conversación.
+    """
     conversaciones = []
-    for thread_id in reversed(_thread_ids()):
-        mensajes = saved_state(_config(thread_id)).get("messages", [])
+    for thread_id in _thread_ids():
+        estado = agent.get_state(_config(thread_id))
+        mensajes = estado.values.get("messages", [])
         if mensajes:
-            conversaciones.append((thread_id, mensajes[0].text[:40]))
-        if len(conversaciones) == limit:
-            break
-    return conversaciones
+            conversaciones.append((estado.created_at or "", thread_id, mensajes[0].text[:40]))
+    conversaciones.sort(reverse=True)
+    return [(thread_id, titulo, _fecha_local(marca)) for marca, thread_id, titulo in conversaciones[:limit]]
+
+
+def delete_thread(thread_id: str) -> None:
+    """Borra una conversación: su historial guardado y su lugar en la lista. No se puede deshacer."""
+    agent.checkpointer.delete_thread(thread_id)
+    CONV_FILE.write_text("\n".join(i for i in _thread_ids() if i != thread_id))
 
 
 # --- Eventos: lo único que las interfaces necesitan conocer --------------------
+
+def describir_paso(nombre: str, args: dict) -> str:
+    """Qué está haciendo el agente, en español, para mostrar mientras trabaja: «Buscando al cliente «Carlos»»."""
+    texto = str(args.get("texto") or "").strip()
+    if nombre == "load_skill":
+        return f"Cargando las instrucciones de «{args.get('nombre', '')}»"
+    if nombre == "buscar_cliente":
+        return f"Buscando al cliente «{texto}»" if texto else "Buscando clientes"
+    if nombre == "buscar_equipos":
+        return f"Buscando el equipo «{texto}»" if texto else "Listando los equipos"
+    if nombre == "consultar_disponibilidad":
+        return f"Verificando la disponibilidad del {args.get('fecha_desde', '?')} al {args.get('fecha_hasta', '?')}"
+    if nombre == "resumen_alquileres":
+        return "Consultando los alquileres activos"
+    if nombre == "alquileres_de_cliente":
+        return "Consultando los alquileres del cliente"
+    if nombre == "generar_contrato_pdf":
+        return f"Generando el contrato del alquiler #{args.get('alquiler_id', '?')}"
+    if nombre == "crear_alquiler":
+        return "Preparando el alquiler para tu confirmación"
+    return f"Ejecutando {nombre}"
+
 
 def _razonamiento(m) -> str:
     """Razonamiento de un mensaje del agente (bloques estándar `reasoning`; Gemini los trae)."""

@@ -22,6 +22,13 @@ def test_buscar_cliente_ignora_tildes_y_mayusculas(cliente):
     assert "Taladro" in run(tools.buscar_equipos, texto="TALADRO")
 
 
+def test_cliente_y_domicilio_para_la_tarjeta_de_confirmacion(cliente):
+    assert tools.cliente_y_domicilio(2, 21) == ("Carlos Pérez · DNI 27333444", "Belgrano 1200")
+    nombre, direccion = tools.cliente_y_domicilio(2, 31)            # el 31 es el domicilio de María Gómez, no de Carlos
+    assert nombre.startswith("Carlos Pérez") and "no es uno de los domicilios del cliente" in direccion
+    assert tools.cliente_y_domicilio(999, 1) == ("cliente #999", "domicilio #1")   # cliente inexistente: ids, sin romper
+
+
 def test_buscar_cliente_sin_resultados(cliente):
     assert run(tools.buscar_cliente, texto="Zzz").startswith("Sin resultados")
 

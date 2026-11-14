@@ -54,6 +54,10 @@ header[data-testid="stHeader"] { background: transparent; }
 .marca-lateral span { color: var(--acento); }
 .sub-lateral { color: var(--apagado); font-size: .8rem; margin: .3rem 0 .4rem; }
 [data-testid="stSidebar"] [data-testid="stImage"] img { border-radius: 14px; }
+.grupo { color: var(--apagado); font-size: .72rem; margin: .8rem 0 .3rem; }
+/* Botón de borrar conversación: chico y discreto (se pone rojo al pasar el mouse) */
+[class*="st-key-del-"] button { min-height: 2.2rem; padding: 0; background: transparent; border-color: transparent; opacity: .55; }
+[class*="st-key-del-"] button:hover { opacity: 1; border-color: #f87171 !important; background: rgba(248, 113, 113, .08) !important; }
 .seccion {
   color: var(--apagado); font-size: .7rem; font-weight: 600; letter-spacing: .12em;
   text-transform: uppercase; margin: 1.1rem 0 .45rem;

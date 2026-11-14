@@ -51,6 +51,14 @@ def test_login_y_unwrap():
     assert c.session.pedidos[1][2]["headers"] == {"Authorization": "Bearer T1"}
 
 
+def test_ver_cliente_pide_el_cliente_por_su_id():
+    c = cliente_con([Resp(data={"accessToken": "T1"}),
+                     Resp(data={"id": 7, "nombre": "Juan Pérez", "domicilios": [{"id": 1, "calle": "San Martín", "numero": "450"}]})])
+    assert c.ver_cliente(7)["nombre"] == "Juan Pérez"
+    metodo, url, _ = c.session.pedidos[1]
+    assert metodo == "GET" and url.endswith("/api/clients/7")
+
+
 def test_reautentica_una_vez_ante_401():
     c = cliente_con([Resp(data={"accessToken": "T1"}), Resp(401), Resp(data={"accessToken": "T2"}),
                      Resp(data={"herramientas": [], "cantHerramientas": 0})])

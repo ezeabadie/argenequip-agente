@@ -351,3 +351,36 @@ def test_no_rota_ante_errores_que_no_son_de_cupo(agente_mod, monkeypatch):
     with pytest.raises(ValueError):
         list(agente_mod.stream_turn("hola", cfg))
     assert rotador.actual == 0 and LLAMADAS["roto"] == 1                         # no pasó a la siguiente
+
+
+# --- Progreso legible y lista de conversaciones --------------------------------------
+
+def test_describir_paso_en_castellano(agente_mod):
+    d = agente_mod.describir_paso
+    assert d("buscar_cliente", {"texto": "Carlos"}) == "Buscando al cliente «Carlos»"
+    assert d("buscar_equipos", {"texto": ""}) == "Listando los equipos"
+    assert d("buscar_equipos", {"texto": "taladro"}) == "Buscando el equipo «taladro»"
+    assert "del 24-12-2030 al 28-12-2030" in d("consultar_disponibilidad", {"fecha_desde": "24-12-2030", "fecha_hasta": "28-12-2030"})
+    assert d("generar_contrato_pdf", {"alquiler_id": 12}) == "Generando el contrato del alquiler #12"
+    assert d("load_skill", {"nombre": "nuevo"}) == "Cargando las instrucciones de «nuevo»"
+    assert d("resumen_alquileres", {}) == "Consultando los alquileres activos"
+    assert d("una_tool_nueva", {}) == "Ejecutando una_tool_nueva"       # una tool sin frase propia no rompe nada
+
+
+def test_lista_de_conversaciones_con_fecha_y_borrado(armar, tmp_path, monkeypatch):
+    from datetime import date
+    ag, _ = armar(AIMessage(content="Respuesta A"), AIMessage(content="Respuesta B"))
+    monkeypatch.setattr(ag, "CONV_FILE", tmp_path / "conversaciones.txt")
+    primera, segunda = ag.new_thread(), ag.new_thread()
+    list(ag.stream_turn("primera conversación", primera))
+    list(ag.stream_turn("segunda conversación", segunda))
+    ag.new_thread()                                                    # una vacía: no aparece en la lista
+
+    lista = ag.list_threads()
+    assert [titulo for _, titulo, _ in lista] == ["segunda conversación", "primera conversación"]   # la más reciente primero
+    assert all(fecha == date.today() for _, _, fecha in lista)
+
+    ag.delete_thread(primera["configurable"]["thread_id"])
+    assert [titulo for _, titulo, _ in ag.list_threads()] == ["segunda conversación"]
+    assert ag.saved_state(primera).get("messages", []) == []         # el historial también se borró
+    assert primera["configurable"]["thread_id"] not in ag._thread_ids()
