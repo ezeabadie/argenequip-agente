@@ -1,11 +1,20 @@
-# Tema de la UI (Streamlit lo lee al iniciar desde esta carpeta). Estilos finos: estilos.css
+# Tema de la UI (Streamlit lo lee al iniciar desde esta carpeta). Estilos finos: estilos.css y estilos-claro.css
+# Con los dos temas definidos, el menú de Streamlit (arriba a la derecha, Settings) permite elegir
+# «Use system setting», «Light» o «Dark».
 [theme]
-base = "dark"
+font = "sans serif"
+
+[theme.dark]
 primaryColor = "#F59E0B"            # acento ámbar
 backgroundColor = "#050505"         # negro profundo
 secondaryBackgroundColor = "#0E0E10"
 textColor = "#ECECEC"
-font = "sans serif"
+
+[theme.light]
+primaryColor = "#B45309"
+backgroundColor = "#FAFAF8"
+secondaryBackgroundColor = "#F2F2EE"
+textColor = "#1A1A1C"
 
 [browser]
 gatherUsageStats = false

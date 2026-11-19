@@ -1,0 +1,27 @@
+/* Paleta del tema claro: app.py la agrega después de estilos.css cuando Streamlit está en modo claro.
+   Solo redefine las variables; el resto de los estilos es el mismo. */
+:root {
+  --fondo: #fafaf8;
+  --panel: #ffffff;
+  --panel-2: #f2f2ee;
+  --borde: #e2e2dc;
+  --texto: #1a1a1c;
+  --apagado: #62626b;
+  --acento: #b45309;            /* ámbar más oscuro para que se lea sobre blanco */
+  --acento-suave: rgba(180, 83, 9, .12);
+  --scroll: #c9c9c2;
+  --lateral: #f1f1ed;
+  --hover: #e8e8e3;
+  --hover-texto: #000;
+  --codigo: #f3f3ef;
+  --sobre-acento: #ffffff;
+  --acento-hover: #92400e;
+  --acento-borde: rgba(180, 83, 9, .35);
+  --ok: #15803d;
+  --ok-borde: rgba(21, 128, 61, .3);
+  --rojo: #dc2626;
+  --rojo-suave: rgba(220, 38, 38, .07);
+  --usuario-a: rgba(217, 119, 6, .14);
+  --usuario-b: rgba(217, 119, 6, .05);
+  --usuario-borde: rgba(180, 83, 9, .28);
+}

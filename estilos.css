@@ -1,5 +1,6 @@
 /* Estilos de la UI (app.py los inyecta). Paleta:
-   fondo #050505 · panel #0C0C0E · borde #1C1C20 · texto #ECECEC · apagado #8B8B94 · acento #F59E0B */
+   fondo #050505 · panel #0C0C0E · borde #1C1C20 · texto #ECECEC · apagado #8B8B94 · acento #F59E0B
+   (tema oscuro; la paleta del tema claro está en estilos-claro.css) */
 
 :root {
   --fondo: #050505;
@@ -11,20 +12,36 @@
   --acento: #f59e0b;
   --acento-suave: rgba(245, 158, 11, 0.12);
   --radio: 14px;
+  --scroll: #26262b;
+  --lateral: #08080a;
+  --hover: #17171b;
+  --hover-texto: #fff;
+  --codigo: #08080a;
+  --sobre-acento: #1a1100;
+  --acento-hover: #fbbf24;
+  --acento-borde: rgba(245, 158, 11, .3);
+  --ok: #4ade80;
+  --ok-borde: rgba(74, 222, 128, .25);
+  --rojo: #f87171;
+  --rojo-suave: rgba(248, 113, 113, .08);
+  --usuario-a: rgba(245, 158, 11, .10);
+  --usuario-b: rgba(245, 158, 11, .03);
+  --usuario-borde: rgba(245, 158, 11, .25);
 }
 
 /* --- Base --------------------------------------------------------------- */
 .stApp { background: var(--fondo); }
 header[data-testid="stHeader"] { background: transparent; }
 [data-testid="stAppDeployButton"], footer, #MainMenu { display: none !important; }
-.block-container { max-width: 860px; padding-top: 1.6rem; padding-bottom: 7rem; }
+/* padding-top: la barra superior de Streamlit (transparente) mide unos 60 px y se come los clicks de lo que quede debajo */
+.block-container { max-width: 860px; padding-top: 3.9rem; padding-bottom: 6rem; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: #26262b; border-radius: 8px; }
+::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* --- Barra lateral (se oculta con la flecha; el botón queda siempre visible) --- */
 [data-testid="stSidebar"] {
-  background: #08080a;
+  background: var(--lateral);
   border-right: 1px solid var(--borde);
 }
 [data-testid="stSidebar"] .block-container { padding-top: 1rem; }
@@ -57,7 +74,7 @@ header[data-testid="stHeader"] { background: transparent; }
 .grupo { color: var(--apagado); font-size: .72rem; margin: .8rem 0 .3rem; }
 /* Botón de borrar conversación: chico y discreto (se pone rojo al pasar el mouse) */
 [class*="st-key-del-"] button { min-height: 2.2rem; padding: 0; background: transparent; border-color: transparent; opacity: .55; }
-[class*="st-key-del-"] button:hover { opacity: 1; border-color: #f87171 !important; background: rgba(248, 113, 113, .08) !important; }
+[class*="st-key-del-"] button:hover { opacity: 1; border-color: var(--rojo) !important; background: var(--rojo-suave) !important; }
 .seccion {
   color: var(--apagado); font-size: .7rem; font-weight: 600; letter-spacing: .12em;
   text-transform: uppercase; margin: 1.1rem 0 .45rem;
@@ -71,11 +88,13 @@ header[data-testid="stHeader"] { background: transparent; }
 .chips { display: flex; gap: .4rem; flex-wrap: wrap; }
 .chip { background: var(--panel-2); border: 1px solid var(--borde); color: var(--apagado);
   border-radius: 999px; padding: .2rem .7rem; font-size: .75rem; white-space: nowrap; }
-.chip.ok { color: #4ade80; border-color: rgba(74, 222, 128, .25); }
-.chip.demo { color: var(--acento); border-color: rgba(245, 158, 11, .3); }
+.chip.tema { color: var(--texto); text-decoration: none; cursor: pointer; transition: border-color .15s; }
+.chip.tema:hover { border-color: var(--acento); }
+.chip.ok { color: var(--ok); border-color: var(--ok-borde); }
+.chip.demo { color: var(--acento); border-color: var(--acento-borde); }
 
 /* --- Pantalla de bienvenida --------------------------------------------- */
-.hero { text-align: center; padding: 2.4rem 0 1.2rem; }
+.hero { text-align: center; padding: 1.2rem 0 1rem; }
 .hero h1 { font-size: 2rem; font-weight: 700; margin: 0 0 .5rem; letter-spacing: -.01em; }
 .hero p { color: var(--apagado); max-width: 520px; margin: 0 auto; line-height: 1.5; }
 .ejemplo { text-align: center; color: var(--apagado); font-size: .85rem; margin-top: 1.2rem; }
@@ -89,20 +108,20 @@ header[data-testid="stHeader"] { background: transparent; }
   background: var(--panel-2); border: 1px solid var(--borde); border-radius: 12px;
   color: var(--texto); transition: border-color .15s, background .15s, transform .05s;
 }
-.stButton > button:hover { border-color: var(--acento); background: #17171b; color: #fff; }
+.stButton > button:hover { border-color: var(--acento); background: var(--hover); color: var(--hover-texto); }
 .stButton > button:active { transform: scale(.985); }
 .stButton > button:disabled { opacity: .45; }
 .stButton > button[data-testid="stBaseButton-primary"] {
-  background: var(--acento); border-color: var(--acento); color: #1a1100; font-weight: 600;
+  background: var(--acento); border-color: var(--acento); color: var(--sobre-acento); font-weight: 600;
 }
-.stButton > button[data-testid="stBaseButton-primary"]:hover { background: #fbbf24; border-color: #fbbf24; color: #1a1100; }
+.stButton > button[data-testid="stBaseButton-primary"]:hover { background: var(--acento-hover); border-color: var(--acento-hover); color: var(--sobre-acento); }
 
 /* Títulos largos de conversaciones: una línea con puntos suspensivos */
 [data-testid="stSidebar"] .stButton button p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Botón «Detener» (cancela la respuesta en curso) */
 .st-key-detener button { min-height: 2rem; padding: .1rem .8rem; font-size: .85rem; background: transparent; color: var(--apagado); }
-.st-key-detener button:hover { border-color: #f87171 !important; color: #f87171 !important; background: rgba(248, 113, 113, .08) !important; }
+.st-key-detener button:hover { border-color: var(--rojo) !important; color: var(--rojo) !important; background: var(--rojo-suave) !important; }
 
 /* Tarjetas de la bienvenida */
 .st-key-hero_nuevo button, .st-key-hero_resumen button {
@@ -130,8 +149,8 @@ header[data-testid="stHeader"] { background: transparent; }
   padding: .9rem 1.1rem; margin-bottom: .7rem; gap: .8rem;
 }
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
-  background: linear-gradient(135deg, rgba(245, 158, 11, .10), rgba(245, 158, 11, .03));
-  border-color: rgba(245, 158, 11, .25);
+  background: linear-gradient(135deg, var(--usuario-a), var(--usuario-b));
+  border-color: var(--usuario-borde);
 }
 [data-testid="stChatMessageAvatarUser"], [data-testid="stChatMessageAvatarAssistant"] {
   background: var(--panel-2); border: 1px solid var(--borde); border-radius: 10px;
@@ -143,7 +162,7 @@ header[data-testid="stHeader"] { background: transparent; }
   background: var(--fondo); border: 1px solid var(--borde); border-radius: 12px;
 }
 [data-testid="stExpander"] summary, [data-testid="stStatus"] summary { font-size: .88rem; color: var(--apagado); }
-[data-testid="stCode"], pre { background: #08080a !important; border-radius: 10px; }
+[data-testid="stCode"], pre { background: var(--codigo) !important; border-radius: 10px; }
 [data-testid="stAlert"] { border-radius: var(--radio); }
 
 /* --- Caja de entrada ---------------------------------------------------- */

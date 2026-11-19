@@ -36,8 +36,13 @@ AVATARES = {"user": "👤", "assistant": str(ICONO) if ICONO.exists() else "🛠
 
 st.set_page_config(page_title="ArgenEquip - Asistente", page_icon=str(ICONO) if ICONO.exists() else "🛠️",
                    initial_sidebar_state="expanded")
-# El tema (colores) está en .streamlit/config.toml; los detalles de estilo, en estilos.css.
-st.html(f"<style>{(Path(__file__).parent / 'estilos.css').read_text(encoding='utf-8')}</style>")
+# Los temas (claro y oscuro) están en .streamlit/config.toml; los detalles de estilo, en estilos.css.
+# Si Streamlit está en modo claro se agrega estilos-claro.css, que solo redefine las variables de color.
+# Sin dato del tema (primera carga) se asume el oscuro, que es el de siempre.
+_estilos = (BASE_DIR / "estilos.css").read_text(encoding="utf-8")
+if st.context.theme.type == "light":
+    _estilos += (BASE_DIR / "estilos-claro.css").read_text(encoding="utf-8")
+st.html(f"<style>{_estilos}</style>")
 if ICONO.exists():
     st.logo(str(ICONO), size="large")   # esquina superior izquierda cuando la barra lateral está cerrada
 
@@ -378,8 +383,13 @@ def render_cabecera() -> None:
     es_api = type(get_client()).__name__ == "HttpClient"
     modo = ('<span class="chip ok">● Sistema real (API)</span>' if es_api
             else '<span class="chip demo">● Datos de demo</span>')
+    # Botón de tema: Streamlit no deja cambiar el tema desde Python, pero sí recargar la página con
+    # ?embed_options=light_theme / dark_theme. Al recargar se retoma la última conversación (resume_thread).
+    claro = st.context.theme.type == "light"
+    cambiar = ('<a class="chip tema" href="?embed_options=dark_theme" target="_self" title="Cambiar a modo oscuro">🌙 Oscuro</a>' if claro
+               else '<a class="chip tema" href="?embed_options=light_theme" target="_self" title="Cambiar a modo claro">☀️ Claro</a>')
     st.html('<div class="cabecera">'
-            f'<div class="chips">{modo}<span class="chip">{escape(PROVEEDORES.get(proveedor, proveedor))} · {escape(nombre)}</span></div>'
+            f'<div class="chips">{modo}<span class="chip">{escape(PROVEEDORES.get(proveedor, proveedor))} · {escape(nombre)}</span>{cambiar}</div>'
             '</div>')
 
 
