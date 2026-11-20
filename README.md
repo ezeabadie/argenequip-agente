@@ -27,6 +27,14 @@ Se pueden escribir como comando suelto (`resumen`) o en una frase libre (*«Quie
 
 El modelo en la nube **nunca toca el sistema**: solo decide qué tool llamar y con qué argumentos. Las tools corren en tu máquina y usan la API REST (no la base directamente), de modo que se respetan las validaciones del backend.
 
+### Diagrama del flujo del agente
+
+![Diagrama del flujo del agente: pantalla, agente, herramientas y sistema](docs/diagrama-agente-argenequip.png)
+
+Los números muestran el recorrido de un pedido: **1** el socio escribe en la interfaz, **2** el agente arma el contexto con la memoria de la conversación, **3** el modelo del proveedor elegido (Gemini, OpenRouter o Groq) decide qué hacer, **4** se ejecuta la herramienta en tu máquina, **5** la herramienta habla con el sistema real a través del cliente de la API, **6** si va a escribir, el middleware pausa y pide la aprobación del socio, **7** se genera el contrato en PDF. Después la respuesta vuelve a la pantalla.
+
+Hay una versión **interactiva** (se recorre el pedido paso a paso y cada pieza explica qué hace): [`docs/diagrama-agente-argenequip.html`](docs/diagrama-agente-argenequip.html). GitHub no la muestra como página, solo como código: descargá el archivo y abrilo en el navegador.
+
 ## Requisitos
 
 - **Python 3.11 o superior** (probado en 3.14).
